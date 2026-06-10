@@ -79,9 +79,18 @@ class GitHubAPI {
 	getToken() {
 		return this.token;
 	}
+
+	private getAuthHeader() {
+		if (!this.token) {
+			throw apiError('Session expired. Please sign in again.', { status : 401 });
+		}
+		return `Bearer ${this.token}`;
+	}
+
 	getUser() {
 		return this.user;
 	}
+
 	hasOAuthScope(scope: string) {
 		return this.oauthScopes.has(scope);
 	}
@@ -114,7 +123,7 @@ class GitHubAPI {
 		const response = await fetch(`${this.apiBase}${endpoint}`, {
 			...restOptions,
 			headers : {
-				Authorization : `token ${this.token}`,
+				Authorization : this.getAuthHeader(),
 				Accept        : 'application/vnd.github.v3+json',
 				...extraHeaders,
 			},
@@ -160,7 +169,7 @@ class GitHubAPI {
 		const response = await fetch(this.graphqlUrl, {
 			method  : 'POST',
 			headers : {
-				'Authorization' : `bearer ${this.token}`,
+				'Authorization' : this.getAuthHeader(),
 				'Content-Type'  : 'application/json',
 			},
 			body : JSON.stringify({ query, variables }),
@@ -605,7 +614,7 @@ class GitHubAPI {
 		const response = await fetch(`${this.apiBase}/repos/${owner}/${repo}/pulls/${number}/merge`, {
 			method  : 'PUT',
 			headers : {
-				'Authorization' : `token ${this.token}`,
+				'Authorization' : this.getAuthHeader(),
 				'Accept'        : 'application/vnd.github.v3+json',
 				'Content-Type'  : 'application/json',
 			},
@@ -627,7 +636,7 @@ class GitHubAPI {
 		const response = await fetch(`${this.apiBase}/repos/${owner}/${repo}/pulls/${number}`, {
 			method  : 'PATCH',
 			headers : {
-				'Authorization' : `token ${this.token}`,
+				'Authorization' : this.getAuthHeader(),
 				'Accept'        : 'application/vnd.github.v3+json',
 				'Content-Type'  : 'application/json',
 			},
