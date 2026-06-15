@@ -1,8 +1,40 @@
 <template>
 	<div class="pr-files-tab u-flex u-flex-col u-flex-1 u-min-h-0 u-overflow-hidden" :style="{ '--tab-size' : tabSize, '--diff-font-size' : diffFontSize + 'px' }">
-		<div v-if="filesLoading" class="pr-detail-loading u-flex u-flex-col u-items-center u-justify-center u-gap-4 u-py-20 u-text-secondary">
-			<div class="spinner"></div>
-			<p class="u-m-0">Loading files...</p>
+		<div v-if="filesLoading" class="pr-files-skeleton u-flex u-flex-col u-flex-1 u-min-h-0" aria-busy="true" aria-label="Loading files">
+			<div class="pr-files-nav-bar pr-files-skeleton-nav u-flex u-items-center u-gap-2 u-fs-13 u-flex-shrink-0">
+				<span class="skeleton-block pr-files-skeleton-nav-btn"></span>
+				<span class="skeleton-block pr-files-skeleton-nav-btn"></span>
+				<span class="skeleton-block pr-files-skeleton-viewed"></span>
+				<span class="skeleton-block pr-files-skeleton-dropdown u-flex-1 u-min-w-0"></span>
+				<span class="skeleton-block pr-files-skeleton-viewed"></span>
+				<span class="skeleton-block pr-files-skeleton-nav-btn"></span>
+				<span class="skeleton-block pr-files-skeleton-nav-btn"></span>
+				<span class="skeleton-line pr-files-skeleton-counter"></span>
+				<span class="skeleton-line pr-files-skeleton-stats"></span>
+			</div>
+
+			<div class="pr-diff-viewer pr-diff-viewer-split pr-files-skeleton-viewer">
+				<div class="pr-diff-split pr-files-skeleton-split">
+					<div class="pr-diff-panel pr-diff-panel-left u-flex-grow-1 u-min-w-0">
+						<div v-for="idx in 22" :key="'left-' + idx" class="pr-files-skeleton-row" :class="skeletonRowClass(idx)">
+							<span class="skeleton-line pr-files-skeleton-gutter"></span>
+							<span class="skeleton-line pr-files-skeleton-code" :class="skeletonCodeClass(idx)"></span>
+						</div>
+					</div>
+					<div class="pr-diff-connector-col u-flex-shrink-0 pr-files-skeleton-connector">
+						<span v-for="idx in 6" :key="'connector-' + idx" class="skeleton-block pr-files-skeleton-connector-band" :style="{ top : `${idx * 13 + 4}%` }"></span>
+					</div>
+					<div class="pr-diff-panel pr-diff-panel-right u-flex-grow-1 u-min-w-0">
+						<div v-for="idx in 22" :key="'right-' + idx" class="pr-files-skeleton-row" :class="skeletonRowClass(idx + 2)">
+							<span class="skeleton-line pr-files-skeleton-gutter"></span>
+							<span class="skeleton-line pr-files-skeleton-code" :class="skeletonCodeClass(idx + 1)"></span>
+						</div>
+					</div>
+					<div class="pr-files-skeleton-minimap u-flex-shrink-0">
+						<span v-for="idx in 14" :key="'map-' + idx" class="skeleton-block pr-files-skeleton-minimap-line" :class="skeletonMinimapClass(idx)"></span>
+					</div>
+				</div>
+			</div>
 		</div>
 
 		<template v-else-if="files.length">
@@ -185,6 +217,39 @@ export default class PrFilesTab extends Vue {
 
 	get currentFile(): PRFile {
 		return this.files[this.currentIndex] || this.files[0];
+	}
+
+	skeletonRowClass(idx: number): string {
+		if (idx % 9 === 0) {
+			return 'is-hunk';
+		}
+		if (idx % 5 === 0) {
+			return 'is-added';
+		}
+		if (idx % 7 === 0) {
+			return 'is-removed';
+		}
+		return '';
+	}
+
+	skeletonCodeClass(idx: number): string {
+		if (idx % 6 === 0) {
+			return 'short';
+		}
+		if (idx % 4 === 0) {
+			return 'mid';
+		}
+		return '';
+	}
+
+	skeletonMinimapClass(idx: number): string {
+		if (idx % 5 === 0) {
+			return 'is-added';
+		}
+		if (idx % 7 === 0) {
+			return 'is-removed';
+		}
+		return '';
 	}
 
 	/** Next file index after `idx0` (wrapping) that is not VIEWED, or -1 if none. */
@@ -1001,5 +1066,157 @@ export default class PrFilesTab extends Vue {
 	font-size: 13px;
 	padding: 32px;
 	text-align: center;
+}
+
+.pr-files-skeleton {
+	width: 100%;
+	pointer-events: none;
+}
+
+.pr-files-skeleton-nav {
+	width: 100%;
+	margin-bottom: 8px;
+}
+
+.pr-files-skeleton-nav-btn {
+	width: 30px;
+	height: 30px;
+	border-radius: var(--radius-sm);
+}
+
+.pr-files-skeleton-viewed {
+	width: 30px;
+	height: 30px;
+	border-radius: var(--radius-sm);
+}
+
+.pr-files-skeleton-dropdown {
+	height: 30px;
+	border-radius: var(--radius-sm);
+}
+
+.pr-files-skeleton-counter {
+	width: 44px;
+	height: 12px;
+}
+
+.pr-files-skeleton-stats {
+	width: 70px;
+	height: 12px;
+}
+
+.pr-files-skeleton-viewer {
+	width: 100%;
+	min-height: 0;
+	margin-top: 0;
+	background: var(--bg-primary);
+}
+
+.pr-files-skeleton-split {
+	display: flex;
+	flex: 1;
+	width: 100%;
+	min-height: 0;
+}
+
+.pr-files-skeleton .pr-diff-panel {
+	display: flex;
+	flex: 1 1 0;
+	flex-direction: column;
+	width: 0;
+	min-height: 0;
+}
+
+.pr-files-skeleton-row {
+	display: grid;
+	flex: 1 1 0;
+	grid-template-columns: 50px minmax(0, 1fr);
+	align-items: center;
+	width: 100%;
+	min-height: 20px;
+	border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+	background: var(--bg-primary);
+}
+
+.pr-files-skeleton-row.is-added {
+	background: var(--diff-add-bg);
+}
+
+.pr-files-skeleton-row.is-removed {
+	background: var(--diff-del-bg);
+}
+
+.pr-files-skeleton-row.is-hunk {
+	background: var(--diff-hunk-bg);
+}
+
+.pr-files-skeleton-gutter {
+	justify-self: end;
+	width: 24px;
+	height: 10px;
+	margin-right: 10px;
+}
+
+.pr-files-skeleton-code {
+	width: calc(100% - 24px);
+	height: 10px;
+	margin-left: 12px;
+}
+
+.pr-files-skeleton-code.mid {
+	width: calc(82% - 24px);
+}
+
+.pr-files-skeleton-code.short {
+	width: calc(64% - 24px);
+}
+
+.pr-files-skeleton-connector {
+	align-self: stretch;
+	min-height: 0;
+}
+
+.pr-files-skeleton-connector-band {
+	position: absolute;
+	left: 8px;
+	right: 8px;
+	height: 32px;
+	border-radius: var(--radius-sm);
+	opacity: 0.75;
+}
+
+.pr-files-skeleton-minimap {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	align-self: stretch;
+	width: 20px;
+	padding: 8px 5px;
+	border-left: 1px solid var(--border);
+	background: var(--bg-secondary);
+}
+
+.pr-files-skeleton-minimap-line {
+	flex: 1 1 0;
+	width: 100%;
+	min-height: 8px;
+	border-radius: 2px;
+	background: var(--diff-minimap-neutral);
+}
+
+.pr-files-skeleton-minimap-line.is-added {
+	background: var(--diff-minimap-add);
+}
+
+.pr-files-skeleton-minimap-line.is-removed {
+	background: var(--diff-minimap-del);
+}
+
+@media (max-width: 760px) {
+	.pr-files-skeleton-counter,
+	.pr-files-skeleton-stats,
+	.pr-files-skeleton-minimap {
+		display: none;
+	}
 }
 </style>

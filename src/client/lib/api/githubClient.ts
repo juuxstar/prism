@@ -61,6 +61,13 @@ function normalizePullRequest(pr: any): any {
 	return { ...pr, merged : Boolean(merged) };
 }
 
+export function isPullRequestConflicted(pr: any): boolean {
+	if (!pr || typeof pr !== 'object') {
+		return false;
+	}
+	return pr.mergeable === false || pr.mergeable_state === 'dirty';
+}
+
 class GitHubAPI {
 
 	private token: string | null = null;
@@ -71,6 +78,7 @@ class GitHubAPI {
 	private botCommentCache = new Map<number, BotCounts>();
 	private prStatsCache = new Map<number, PRStats>();
 	private checksCache = new Map<number, ChecksSummary>();
+	private prMergeabilityCache = new Map<number, PRMergeability>();
 	private oauthScopes = new Set<string>();
 
 	setToken(t: string) {
@@ -107,6 +115,7 @@ class GitHubAPI {
 		this.botCommentCache.clear();
 		this.prStatsCache.clear();
 		this.checksCache.clear();
+		this.prMergeabilityCache.clear();
 	}
 
 	clearChecksCache() {
@@ -404,19 +413,26 @@ class GitHubAPI {
 					const repo = pr.repository_url.match(/repos\/(.+)/)![1];
 					try {
 						const data = await this.apiFetch(`/repos/${repo}/pulls/${pr.number}`);
-						return { id : pr.id as number, stats : { changedFiles : data.changed_files, additions : data.additions, deletions : data.deletions } as PRStats };
+						return {
+							id           : pr.id as number,
+							stats        : { changedFiles : data.changed_files, additions : data.additions, deletions : data.deletions } as PRStats,
+							mergeability : { mergeable : data.mergeable, mergeable_state : data.mergeable_state } as PRMergeability,
+						};
 					}
 					catch (error: any) {
 						if (error.rateLimitReset || error.message?.includes('rate limit')) {
 							throw error;
 						}
-						return { id : pr.id as number, stats : null };
+						return { id : pr.id as number, stats : null, mergeability : null };
 					}
 				})
 			);
-			for (const { id, stats } of results) {
+			for (const { id, stats, mergeability } of results) {
 				if (stats !== null) {
 					this.prStatsCache.set(id, stats);
+				}
+				if (mergeability !== null) {
+					this.prMergeabilityCache.set(id, mergeability);
 				}
 			}
 		}
@@ -424,6 +440,10 @@ class GitHubAPI {
 
 	getPRStats(prId: number): PRStats | null {
 		return this.prStatsCache.get(prId) || null;
+	}
+
+	getPRMergeability(prId: number): PRMergeability | null {
+		return this.prMergeabilityCache.get(prId) || null;
 	}
 
 	async fetchChecks(prs: any[]) {
@@ -1021,6 +1041,11 @@ export interface PRStats {
 	changedFiles: number;
 	additions: number;
 	deletions: number;
+}
+
+export interface PRMergeability {
+	mergeable: boolean | null;
+	mergeable_state?: string | null;
 }
 
 export interface AccessibleRepo {

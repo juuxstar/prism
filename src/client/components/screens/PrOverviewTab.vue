@@ -10,6 +10,10 @@
 
 				<div class="pr-detail-actions-stats card pr-detail-overview-gutter u-flex u-flex-col u-gap-3 u-m-0">
 					<h2 class="u-flex-shrink-0">Actions &amp; stats</h2>
+					<div v-if="hasConflicts" class="pr-detail-conflict-alert u-flex u-items-center u-gap-2 u-fs-13 u-fw-600">
+						<span class="pr-detail-conflict-dot u-flex-shrink-0"></span>
+						<span>This pull request has merge conflicts</span>
+					</div>
 					<div v-if="showActionsSection" class="pr-detail-actions-buttons u-flex u-flex-wrap u-items-center u-gap-2">
 						<button
 							v-if="showApproveAction"
@@ -80,6 +84,29 @@
 								<span class="pr-detail-branch-piece u-min-w-0 u-text-primary">{{ headBranchText }}</span>
 								<span class="pr-detail-branch-arrow u-flex-shrink-0 u-text-tertiary u-fw-500" aria-hidden="true">→</span>
 								<span class="pr-detail-branch-piece u-min-w-0 u-text-primary">{{ baseBranchText }}</span>
+							</div>
+						</div>
+						<div class="pr-detail-stat pr-detail-stat-url u-flex u-flex-col u-gap-0-5">
+							<span class="pr-detail-stat-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide">GitHub PR URL</span>
+							<div class="pr-detail-stat-url-row u-flex u-items-center u-gap-1-5 u-min-w-0">
+								<a
+									:href="prUrl"
+									target="_blank"
+									rel="noopener"
+									class="pr-detail-stat-url-link u-min-w-0 u-fs-12 u-fw-600 u-font-mono"
+									:title="prUrl"
+								>
+									{{ prUrl }}
+								</a>
+								<button
+									type="button"
+									class="pr-detail-stat-copy-btn u-inline-flex u-items-center u-justify-center u-flex-shrink-0 u-cursor-pointer"
+									:class="{ copied : prUrlCopyState === 'copied' }"
+									:title="prUrlCopyState === 'copied' ? 'Copied' : 'Copy URL'"
+									:aria-label="prUrlCopyState === 'copied' ? 'Copied PR URL' : 'Copy PR URL'"
+									@click="copyPrUrl"
+									v-html="prUrlCopyIcon"
+								></button>
 							</div>
 						</div>
 						<div class="pr-detail-stat u-flex u-flex-col u-gap-0-5">
@@ -365,10 +392,11 @@
 
 <script lang="ts">
 import type { CheckAnnotation, CheckRunDetail, IssueComment, RepoLabel, ReviewComment } from '@/lib/api/githubClient';
-import GitHubClient, { stripCommentTypePrefix } from '@/lib/api/githubClient';
-import type { CommentThread }                   from '@/lib/diff/prDiffTypes';
-import { renderGithubMarkdown }                 from '@/lib/githubMarkdown';
-import { timeAgo }                              from '@/lib/utils';
+import GitHubClient, { isPullRequestConflicted, stripCommentTypePrefix }                from '@/lib/api/githubClient';
+import type { CommentThread }   from '@/lib/diff/prDiffTypes';
+import { renderGithubMarkdown } from '@/lib/githubMarkdown';
+import { iconSvg }              from '@/lib/icons';
+import { timeAgo }              from '@/lib/utils';
 
 import { Component, Prop, Vue } from 'vue-facing-decorator';
 
@@ -425,6 +453,8 @@ export default class PrOverviewTab extends Vue {
 	issueReplyDraftId: number | null = null;
 	issueReplyBody = '';
 	issueReplySubmitting = false;
+	prUrlCopyState: 'idle' | 'copied' = 'idle';
+	private prUrlCopyResetId: number | null = null;
 
 	get reviewPopoverThreadPayload(): CommentThread | null {
 		const t = this.reviewPopoverThread;
@@ -471,6 +501,14 @@ export default class PrOverviewTab extends Vue {
 		return `${this.headBranchText} into ${this.baseBranchText}`;
 	}
 
+	get prUrl(): string {
+		return String(this.pr?.html_url || `https://github.com/${this.owner}/${this.repo}/pull/${this.prNumber}`);
+	}
+
+	get prUrlCopyIcon(): string {
+		return iconSvg(this.prUrlCopyState === 'copied' ? 'checkmark' : 'copy', 14);
+	}
+
 	get authorDisplayName(): string {
 		if (!this.pr?.user?.login) {
 			return '—';
@@ -492,6 +530,10 @@ export default class PrOverviewTab extends Vue {
 
 	get showActionsSection(): boolean {
 		return this.showApproveAction || this.showMergeAction || this.showCloseAction || this.showDraftToggle;
+	}
+
+	get hasConflicts(): boolean {
+		return isPullRequestConflicted(this.pr);
 	}
 
 	get draftToggleTooltip(): string {
@@ -615,6 +657,31 @@ export default class PrOverviewTab extends Vue {
 		}
 		finally {
 			this.resolveTogglingThreadId = null;
+		}
+	}
+
+	async copyPrUrl() {
+		try {
+			await navigator.clipboard.writeText(this.prUrl);
+			this.prUrlCopyState = 'copied';
+			if (this.prUrlCopyResetId != null) {
+				window.clearTimeout(this.prUrlCopyResetId);
+			}
+			this.prUrlCopyResetId = window.setTimeout(() => {
+				this.prUrlCopyState  = 'idle';
+				this.prUrlCopyResetId = null;
+			}, 2000);
+		}
+		catch {
+			const link = this.$el?.querySelector?.('.pr-detail-stat-url-link') as HTMLElement | null;
+			if (!link) {
+				return;
+			}
+			const range = document.createRange();
+			range.selectNodeContents(link);
+			const sel = window.getSelection();
+			sel?.removeAllRanges();
+			sel?.addRange(range);
 		}
 	}
 
@@ -798,6 +865,9 @@ export default class PrOverviewTab extends Vue {
 
 	beforeUnmount() {
 		document.removeEventListener('mousedown', this.onOverviewPopoverOutside, true);
+		if (this.prUrlCopyResetId != null) {
+			window.clearTimeout(this.prUrlCopyResetId);
+		}
 	}
 
 	handleAddLabel(name: string) {
@@ -874,6 +944,22 @@ export default class PrOverviewTab extends Vue {
 	border-color: var(--accent-red) !important;
 }
 
+.pr-detail-conflict-alert {
+	width: fit-content;
+	padding: 6px 10px;
+	border: 1px solid color-mix(in srgb, var(--accent-red) 45%, transparent);
+	border-radius: var(--radius-sm);
+	background: var(--danger-bg-subtle);
+	color: var(--accent-red);
+}
+
+.pr-detail-conflict-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: currentColor;
+}
+
 .pr-detail-col-comments {
 	min-height: 0;
 }
@@ -884,13 +970,14 @@ export default class PrOverviewTab extends Vue {
 	}
 }
 
+.pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-url,
 .pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-branch,
 .pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-author {
 	flex: 1 1 100%;
 	text-align: left;
 }
 
-.pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat:not(.pr-detail-stat-branch):not(.pr-detail-stat-author) {
+.pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat:not(.pr-detail-stat-url):not(.pr-detail-stat-branch):not(.pr-detail-stat-author) {
 	flex: 1 1 0;
 	min-width: 0;
 	text-align: center;
@@ -1320,6 +1407,46 @@ html[data-color-scheme="light"] .pr-detail-overview .card > h2 {
 
 .pr-detail-stat-branch-wrap {
 	word-break: break-all;
+}
+
+.pr-detail-stat-url-row {
+	max-width: 100%;
+}
+
+.pr-detail-stat-url-link {
+	color: var(--accent-blue);
+	text-decoration: none;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+
+	&:hover {
+		text-decoration: underline;
+	}
+}
+
+.pr-detail-stat-copy-btn {
+	width: 26px;
+	height: 26px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--bg-primary);
+	color: var(--text-secondary);
+	transition:
+		border-color var(--transition),
+		background var(--transition),
+		color var(--transition);
+
+	&:hover {
+		border-color: var(--border-hover);
+		background: var(--bg-tertiary);
+		color: var(--text-primary);
+	}
+
+	&.copied {
+		border-color: color-mix(in srgb, var(--accent-green) 55%, var(--border));
+		color: var(--accent-green);
+	}
 }
 
 .pr-detail-label {

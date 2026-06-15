@@ -67,7 +67,6 @@
 								Submit Review ({{ pendingComments.length }})
 							</button>
 						</template>
-						<a :href="pr.html_url" target="_blank" rel="noopener" class="pr-detail-github-link">GitHub &rarr;</a>
 						<settings-popup v-if="currentUser" :user="currentUser" @logout="handleLogout" />
 					</div>
 				</header>
@@ -1248,18 +1247,6 @@ html[data-color-scheme="light"] .pr-detail-header {
 	width: 20px;
 	height: 20px;
 	border-radius: 50%;
-}
-
-.pr-detail-github-link {
-	color: var(--text-secondary);
-	text-decoration: none;
-	font-size: 13px;
-	white-space: nowrap;
-	transition: color var(--transition);
-
-	&:hover {
-		color: var(--text-primary);
-	}
 }
 
 .pr-detail-tabs {

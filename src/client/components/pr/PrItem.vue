@@ -80,7 +80,7 @@
 
 <script lang="ts">
 import type { BotCounts, ChecksSummary, PRStats } from '@/lib/api/githubClient';
-import GitHubClient         from '@/lib/api/githubClient';
+import GitHubClient, { isPullRequestConflicted }  from '@/lib/api/githubClient';
 import { isPwaDisplayMode } from '@/lib/displayMode';
 import { iconSvg }          from '@/lib/icons';
 import { timeAgo }          from '@/lib/utils';
@@ -146,7 +146,9 @@ export default class PrItem extends Vue {
 	}
 
 	get hasConflicts(): boolean {
-		return this.pr.labels?.some((l: any) => l.name.toLowerCase() === 'has conflicts') ?? false;
+		void this.asyncVersion;
+		const mergeability = GitHubClient.getPRMergeability(this.pr.id);
+		return isPullRequestConflicted(mergeability);
 	}
 
 	get visibleLabels(): any[] {
