@@ -18,6 +18,6 @@
 			"@/*": ["src/client/*"]
 		}
 	},
-	"include": ["src/client/**/*.ts", "src/client/**/*.vue"],
+	"include": ["src/client/**/*.ts", "src/client/**/*.vue", "vite.config.ts"],
 	"exclude": ["node_modules", "dist", "src/server"]
 }

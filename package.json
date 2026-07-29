@@ -3,9 +3,16 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"dev": "concurrently \"vite\" \"tsx watch src/server/index.ts\"",
-		"build": "vite build && tsc -p tsconfig.server.json",
+		"dev": "concurrently \"vite\" \"NODE_ENV=development tsx watch src/server/index.ts\"",
+		"postinstall": "node scripts/prepare-http-decorators.mjs",
+		"build": "vite build && tsc -p src/server/tsconfig.json",
 		"start": "node build/server/index.js",
+		"start:docker": "docker compose up --build",
+		"dev:docker": "docker compose -f docker-compose.dev.yml up",
+		"stop:docker": "docker compose down",
+		"stop:dev:docker": "docker compose -f docker-compose.dev.yml down",
+		"logs:docker": "docker compose logs -f prism",
+		"logs:dev:docker": "docker compose -f docker-compose.dev.yml logs -f prism",
 		"start:dev": "tsx src/server/index.ts",
 		"lint": "eslint .",
 		"lint:fix": "eslint . --fix",
@@ -15,6 +22,7 @@
 		"typecheck:build": "vite build"
 	},
 	"dependencies": {
+		"@juuxstar/http-decorators": "https://github.com/juuxstar/http-decorators/archive/refs/heads/main.tar.gz",
 		"dompurify": "^3.3.3",
 		"express": "^4",
 		"highlight.js": "^11.11.1",

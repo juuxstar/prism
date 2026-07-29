@@ -4,30 +4,100 @@
 			<div class="pr-column pr-column-split">
 				<create-pr-section v-if="branches.length > 0" :branches="branches" @create-pr="$emit('create-pr', $event)" />
 				<div v-if="orderedOther.length" class="pr-subcolumn">
-					<pr-column title="Other PRs" :prs="orderedOther" :hidden-labels="emptySet" section="other" :show-repo="showRepo" :async-version="asyncVersion" @drop="handleDrop" @open-pr="$emit('open-pr', $event)" />
+					<pr-column
+						title="Other PRs"
+						:prs="orderedOther"
+						:hidden-labels="emptySet"
+						section="other"
+						:show-repo="showRepo"
+						:async-version="asyncVersion"
+						:checkout-status="checkoutStatus"
+						@drop="handleDrop"
+						@open-pr="$emit('open-pr', $event)"
+					/>
 				</div>
 				<div class="pr-subcolumn">
-					<pr-column title="Alpha Review" :prs="orderedAlpha" :hidden-labels="alphaHidden" section="alpha" :show-repo="showRepo" :async-version="asyncVersion" @drop="handleDrop" @open-pr="$emit('open-pr', $event)" />
+					<pr-column
+						title="Alpha Review"
+						:prs="orderedAlpha"
+						:hidden-labels="alphaHidden"
+						section="alpha"
+						:show-repo="showRepo"
+						:async-version="asyncVersion"
+						:checkout-status="checkoutStatus"
+						@drop="handleDrop"
+						@open-pr="$emit('open-pr', $event)"
+					/>
 				</div>
 				<div class="pr-subcolumn">
-					<pr-column title="Beta Review" :prs="orderedBeta" :hidden-labels="betaHidden" section="beta" :show-repo="showRepo" :async-version="asyncVersion" @drop="handleDrop" @open-pr="$emit('open-pr', $event)" />
+					<pr-column
+						title="Beta Review"
+						:prs="orderedBeta"
+						:hidden-labels="betaHidden"
+						section="beta"
+						:show-repo="showRepo"
+						:async-version="asyncVersion"
+						:checkout-status="checkoutStatus"
+						@drop="handleDrop"
+						@open-pr="$emit('open-pr', $event)"
+					/>
 				</div>
 			</div>
 			<div class="pr-column">
-				<pr-column title="Your Review" :prs="orderedGamma" :hidden-labels="gammaHiddenLabels" section="gamma" :show-repo="showRepo" :async-version="asyncVersion" @drop="handleDrop" @open-pr="$emit('open-pr', $event)" />
+				<pr-column
+					title="Your Review"
+					:prs="orderedGamma"
+					:hidden-labels="gammaHiddenLabels"
+					section="gamma"
+					:show-repo="showRepo"
+					:async-version="asyncVersion"
+					:checkout-status="checkoutStatus"
+					@drop="handleDrop"
+					@open-pr="$emit('open-pr', $event)"
+				/>
 			</div>
 			<div class="pr-column pr-column-split">
 				<div class="pr-subcolumn">
-					<pr-column title="Waiting on Checks" :prs="waitingOnChecks" :hidden-labels="mergeHidden" section="merge" :show-repo="showRepo" :async-version="asyncVersion" @drop="handleDrop" @open-pr="$emit('open-pr', $event)" />
+					<pr-column
+						title="Waiting on Checks"
+						:prs="waitingOnChecks"
+						:hidden-labels="mergeHidden"
+						section="merge"
+						:show-repo="showRepo"
+						:async-version="asyncVersion"
+						:checkout-status="checkoutStatus"
+						@drop="handleDrop"
+						@open-pr="$emit('open-pr', $event)"
+					/>
 				</div>
 				<div class="pr-subcolumn">
-					<pr-column title="Ready to Merge" :prs="readyMerge" :hidden-labels="mergeHidden" section="merge" :show-repo="showRepo" :async-version="asyncVersion" @drop="handleDrop" @open-pr="$emit('open-pr', $event)" />
+					<pr-column
+						title="Ready to Merge"
+						:prs="readyMerge"
+						:hidden-labels="mergeHidden"
+						section="merge"
+						:show-repo="showRepo"
+						:async-version="asyncVersion"
+						:checkout-status="checkoutStatus"
+						@drop="handleDrop"
+						@open-pr="$emit('open-pr', $event)"
+					/>
 				</div>
 			</div>
 		</div>
 		<div v-if="isDraftMode" class="drafts-view u-py-4 u-px-6 u-m-auto u-w-full">
 			<div class="pr-column drafts-column">
-				<pr-column title="Drafts" :prs="filteredPRs" :hidden-labels="emptySet" section="drafts" :show-repo="showRepo" :async-version="asyncVersion" @drop="handleDrop" @open-pr="$emit('open-pr', $event)" />
+				<pr-column
+					title="Drafts"
+					:prs="filteredPRs"
+					:hidden-labels="emptySet"
+					section="drafts"
+					:show-repo="showRepo"
+					:async-version="asyncVersion"
+					:checkout-status="checkoutStatus"
+					@drop="handleDrop"
+					@open-pr="$emit('open-pr', $event)"
+				/>
 			</div>
 		</div>
 		<div v-if="isEmpty" class="empty-state u-flex u-flex-col u-items-center u-justify-center u-text-center u-gap-3-5 u-fs-15 u-text-tertiary u-py-25 u-px-8">
@@ -38,7 +108,8 @@
 </template>
 
 <script lang="ts">
-import GitHubClient from '@/lib/api/githubClient';
+import type { GitWorkspaceStatus } from '@/lib/api/gitCheckoutClient';
+import GitHubClient                from '@/lib/api/githubClient';
 
 import { Component, Prop, Vue } from 'vue-facing-decorator';
 
@@ -66,6 +137,7 @@ export default class PrBoard extends Vue {
 	@Prop({ required : true }) readonly asyncVersion!: number;
 	@Prop({ required : true }) readonly branches!: any[];
 	@Prop({ required : true }) readonly user!: any;
+	@Prop({ default : null }) readonly checkoutStatus!: GitWorkspaceStatus | null;
 
 	alphaHidden = ALPHA_HIDDEN_LABELS;
 	betaHidden = BETA_HIDDEN_LABELS;

@@ -31,6 +31,10 @@
 				<span>opened {{ timeAgo(pr.created_at) }}</span>
 				<span class="pr-meta-sep">&middot;</span>
 				<span>updated {{ timeAgo(pr.updated_at) }}</span>
+				<template v-if="checkoutState">
+					<span class="pr-meta-sep">&middot;</span>
+					<span class="checkout-badge u-fs-11 u-fw-600 u-whitespace-nowrap" :title="checkoutBadgeTitle">{{ checkoutBadgeText }}</span>
+				</template>
 				<template v-if="pr.comments > 0">
 					<span class="pr-meta-sep">&middot;</span>
 					<span class="pr-comments u-flex u-items-center u-gap-1"> <span v-html="$icon('comment', 12)"></span> {{ pr.comments }} </span>
@@ -79,11 +83,13 @@
 </template>
 
 <script lang="ts">
-import type { BotCounts, ChecksSummary, PRStats } from '@/lib/api/githubClient';
-import GitHubClient, { isPullRequestConflicted }  from '@/lib/api/githubClient';
-import { isPwaDisplayMode } from '@/lib/displayMode';
-import { iconSvg }          from '@/lib/icons';
-import { timeAgo }          from '@/lib/utils';
+import type { GitWorkspaceStatus, PullRequestCheckoutState } from '@/lib/api/gitCheckoutClient';
+import { checkoutStateForPr } from '@/lib/api/gitCheckoutClient';
+import type { BotCounts, ChecksSummary, PRStats }            from '@/lib/api/githubClient';
+import GitHubClient, { isPullRequestConflicted }             from '@/lib/api/githubClient';
+import { isPwaDisplayMode }   from '@/lib/displayMode';
+import { iconSvg }            from '@/lib/icons';
+import { timeAgo }            from '@/lib/utils';
 
 import { Component, Prop, Vue } from 'vue-facing-decorator';
 
@@ -103,6 +109,7 @@ export default class PrItem extends Vue {
 	@Prop({ default : () => new Set<string>() }) readonly hiddenLabels!: Set<string>;
 	@Prop({ required : true }) readonly showRepo!: boolean;
 	@Prop({ required : true }) readonly asyncVersion!: number;
+	@Prop({ default : null }) readonly checkoutStatus!: GitWorkspaceStatus | null;
 
 	readonly timeAgo = timeAgo;
 
@@ -184,7 +191,29 @@ export default class PrItem extends Vue {
 	}
 
 	get hasAsyncData(): boolean {
-		return this.checks !== null || this.botTotal > 0;
+		return this.checks !== null || this.botTotal > 0 || this.hasConflicts;
+	}
+
+	get checkoutState(): PullRequestCheckoutState | null {
+		void this.asyncVersion;
+		return checkoutStateForPr(this.pr, this.checkoutStatus);
+	}
+
+	get checkoutBadgeText(): string {
+		const state = this.checkoutState;
+		if (!state) {
+			return '';
+		}
+		return state.isMain ? 'Checked out' : `Checked out: ${state.label}`;
+	}
+
+	get checkoutBadgeTitle(): string {
+		const state = this.checkoutState;
+		if (!state) {
+			return '';
+		}
+		const freshness = state.shaMatches ? 'At PR head' : 'Branch is checked out but not at the latest PR head';
+		return `${freshness} in ${state.path}`;
 	}
 
 	labelStyle(label: any): Record<string, string> {
@@ -405,6 +434,13 @@ export default class PrItem extends Vue {
 .conflict-badge {
 	color: var(--accent-red);
 	background: var(--danger-bg-subtle);
+	padding: 1px var(--u-1-5);
+	border-radius: var(--radius-sm);
+}
+
+.checkout-badge {
+	color: var(--accent-green);
+	background: color-mix(in srgb, var(--accent-green) 12%, transparent);
 	padding: 1px var(--u-1-5);
 	border-radius: var(--radius-sm);
 }

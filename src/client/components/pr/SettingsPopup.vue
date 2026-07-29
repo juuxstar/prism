@@ -40,7 +40,7 @@
 							<option v-for="preset in tabSizePresets" :key="preset" :value="preset">{{ preset }} spaces</option>
 						</select>
 					</label>
-					<div class="u-mt-5">
+					<div class="settings-actions">
 						<button type="button" class="settings-save u-w-full u-py-2 u-px-2-5 u-fs-13 u-fw-600 u-cursor-pointer" @click="saveSettings">Save</button>
 						<button type="button" class="settings-signout u-w-full u-py-2 u-px-2-5 u-fs-13 u-cursor-pointer" @click="signOut">Sign out</button>
 					</div>
@@ -216,7 +216,7 @@ html[data-color-scheme="light"] .settings-popup-overlay {
 }
 
 .settings-popup {
-	width: min(320px, 100%);
+	width: min(420px, 100%);
 	background: var(--bg-secondary);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
@@ -255,6 +255,10 @@ html[data-color-scheme="light"] .settings-popup {
 		background: var(--bg-secondary);
 		color: var(--text-primary);
 	}
+}
+
+.settings-actions {
+	margin-top: 36px;
 }
 
 .settings-save {

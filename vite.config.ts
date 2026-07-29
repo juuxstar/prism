@@ -2,6 +2,8 @@ import vue              from '@vitejs/plugin-vue';
 import { resolve }      from 'path';
 import { defineConfig } from 'vite';
 
+const devOrigin = process.env.VITE_DEV_ORIGIN;
+
 export default defineConfig({
 	root  : resolve(__dirname, 'src/client'),
 	build : {
@@ -13,7 +15,11 @@ export default defineConfig({
 		alias : { '@' : resolve(__dirname, 'src/client') },
 	},
 	server : {
-		proxy : {
+		host       : '0.0.0.0',
+		port       : 5173,
+		strictPort : true,
+		...(devOrigin ? { origin : devOrigin } : {}),
+		proxy      : {
 			'/api' : {
 				target       : 'http://localhost:3002',
 				changeOrigin : true,

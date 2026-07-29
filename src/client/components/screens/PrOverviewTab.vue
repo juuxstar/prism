@@ -14,63 +14,116 @@
 						<span class="pr-detail-conflict-dot u-flex-shrink-0"></span>
 						<span>This pull request has merge conflicts</span>
 					</div>
-					<div v-if="showActionsSection" class="pr-detail-actions-buttons u-flex u-flex-wrap u-items-center u-gap-2">
-						<button
-							v-if="showApproveAction"
-							type="button"
-							class="pr-overview-action-btn pr-overview-action-approve u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
-							:disabled="approvingPr"
-							title="Approve, clear changes-requested labels, and add ready to merge"
-							@click="$emit('approve-pr')"
-						>
-							<span v-if="approvingPr" class="async-loader"></span>
-							<template v-else>&#10003; Approve</template>
-						</button>
-						<span
-							v-if="showMergeAction"
-							class="pr-detail-control-wrap has-tooltip u-inline-flex u-items-center u-relative"
-							data-tooltip="Squash all commits into one and merge into the base branch (same as GitHub's squash merge)."
-						>
+					<div v-if="showActionsSection" class="pr-detail-action-groups u-flex u-flex-col u-gap-2">
+						<div v-if="showPrActions" class="pr-detail-action-row u-flex u-flex-wrap u-items-center u-gap-2">
+							<span class="pr-detail-action-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide u-flex-shrink-0">PR Actions</span>
 							<button
+								v-if="showApproveAction"
 								type="button"
-								class="pr-overview-action-btn pr-overview-action-merge u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
-								:disabled="mergingPr"
-								@click="$emit('merge-pr')"
+								class="pr-overview-action-btn pr-overview-action-approve u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
+								:disabled="approvingPr"
+								title="Approve, clear changes-requested labels, and add ready to merge"
+								@click="$emit('approve-pr')"
 							>
-								<span v-if="mergingPr" class="async-loader"></span>
-								<template v-else>Merge</template>
+								<span v-if="approvingPr" class="async-loader"></span>
+								<template v-else>&#10003; Approve</template>
 							</button>
-						</span>
-						<button
-							v-if="showCloseAction"
-							type="button"
-							class="pr-overview-action-btn pr-overview-action-close u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
-							:disabled="closingPr"
-							@click="$emit('close-pr')"
-						>
-							<span v-if="closingPr" class="async-loader"></span>
-							<template v-else>Close</template>
-						</button>
-						<span
-							v-if="showDraftToggle"
-							class="pr-detail-control-wrap has-tooltip u-inline-flex u-items-center u-relative"
-							:data-tooltip="draftToggleTooltip"
-						>
+							<span
+								v-if="showMergeAction"
+								class="pr-detail-control-wrap has-tooltip u-inline-flex u-items-center u-relative"
+								data-tooltip="Squash all commits into one and merge into the base branch (same as GitHub's squash merge)."
+							>
+								<button
+									type="button"
+									class="pr-overview-action-btn pr-overview-action-merge u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
+									:disabled="mergingPr"
+									@click="$emit('merge-pr')"
+								>
+									<span v-if="mergingPr" class="async-loader"></span>
+									<template v-else>Merge</template>
+								</button>
+							</span>
 							<button
+								v-if="showCloseAction"
 								type="button"
-								class="pr-overview-action-btn pr-overview-action-draft u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
-								:disabled="togglingDraft"
-								@click="$emit('toggle-draft')"
+								class="pr-overview-action-btn pr-overview-action-close u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
+								:disabled="closingPr"
+								@click="$emit('close-pr')"
 							>
-								<span v-if="togglingDraft" class="async-loader"></span>
-								<template v-else>{{ pr.draft ? 'Change to PR' : 'Change to Draft' }}</template>
+								<span v-if="closingPr" class="async-loader"></span>
+								<template v-else>Close</template>
 							</button>
-						</span>
+							<span
+								v-if="showDraftToggle"
+								class="pr-detail-control-wrap has-tooltip u-inline-flex u-items-center u-relative"
+								:data-tooltip="draftToggleTooltip"
+							>
+								<button
+									type="button"
+									class="pr-overview-action-btn pr-overview-action-draft u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
+									:disabled="togglingDraft"
+									@click="$emit('toggle-draft')"
+								>
+									<span v-if="togglingDraft" class="async-loader"></span>
+									<template v-else>{{ pr.draft ? 'Change to PR' : 'Change to Draft' }}</template>
+								</button>
+							</span>
+						</div>
+						<div v-if="showGitActions" class="pr-detail-action-row u-flex u-flex-wrap u-items-center u-gap-2">
+							<span class="pr-detail-action-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide u-flex-shrink-0">Git Actions</span>
+							<span v-if="showCheckoutAction" class="pr-overview-checkout-control u-inline-flex u-items-center u-gap-2 u-flex-wrap">
+								<select
+									v-if="showWorktreeSelector"
+									v-model="selectedWorktreePath"
+									class="pr-overview-worktree-select u-fs-12"
+									:disabled="checkingOutPr"
+									title="Choose worktree directory"
+								>
+									<option value="">Choose worktree...</option>
+									<option v-for="checkout in worktreeOptions" :key="checkout.path" :value="checkout.path" :disabled="checkout.dirty">
+										{{ checkout.label }}{{ checkout.dirty ? ' (dirty)' : '' }}{{ checkout.branch && checkout.branch !== 'HEAD' ? ' - ' + checkout.branch : '' }}
+									</option>
+								</select>
+								<button
+									type="button"
+									class="pr-overview-action-btn pr-overview-action-checkout u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
+									:disabled="checkoutDisabled"
+									@click="emitCheckout"
+								>
+									<span v-if="checkingOutPr" class="async-loader"></span>
+									<template v-else>Checkout</template>
+								</button>
+							</span>
+							<button
+								v-if="showLocalGitActions"
+								type="button"
+								class="pr-overview-action-btn pr-overview-action-commit u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
+								:disabled="commitLocalDisabled"
+								:title="commitLocalTitle"
+								@click="$emit('commit-local-changes')"
+							>
+								<span v-if="committingLocalChanges" class="async-loader"></span>
+								<template v-else>Git Commit</template>
+							</button>
+							<button
+								v-if="showLocalGitActions"
+								type="button"
+								class="pr-overview-action-btn pr-overview-action-push u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
+								:disabled="pushLocalDisabled"
+								:title="pushLocalTitle"
+								@click="$emit('push-local-changes')"
+							>
+								<span v-if="pushingLocalChanges" class="async-loader"></span>
+								<template v-else>Git Push</template>
+							</button>
+						</div>
 					</div>
+					<p v-if="checkoutError" class="pr-overview-checkout-error u-m-0 u-fs-13">{{ checkoutError }}</p>
+					<p v-if="localGitError" class="pr-overview-checkout-error u-m-0 u-fs-13">{{ localGitError }}</p>
 					<div class="pr-detail-stat-grid u-flex u-flex-wrap u-items-start u-gap-3 u-text-center">
 						<div class="pr-detail-stat pr-detail-stat-author u-flex u-flex-col u-gap-0-5">
 							<span class="pr-detail-stat-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide">Author</span>
-							<div class="pr-detail-stat-author-row u-flex u-items-center u-gap-1-5 u-fs-13 u-fw-500 u-text-secondary">
+							<div class="pr-detail-stat-author-row u-flex u-items-center u-gap-1-5 u-fs-12 u-fw-600 u-text-primary">
 								<img v-if="pr.user?.avatar_url" :src="pr.user.avatar_url" class="pr-detail-avatar u-flex-shrink-0" alt="" />
 								<span class="u-min-w-0">{{ authorDisplayName }}</span>
 							</div>
@@ -84,6 +137,20 @@
 								<span class="pr-detail-branch-piece u-min-w-0 u-text-primary">{{ headBranchText }}</span>
 								<span class="pr-detail-branch-arrow u-flex-shrink-0 u-text-tertiary u-fw-500" aria-hidden="true">→</span>
 								<span class="pr-detail-branch-piece u-min-w-0 u-text-primary">{{ baseBranchText }}</span>
+							</div>
+						</div>
+						<div v-if="checkoutStatusText" class="pr-detail-stat pr-detail-stat-checkout u-flex u-flex-col u-gap-0-5">
+							<span class="pr-detail-stat-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide">Checkout</span>
+							<div class="pr-detail-checkout-row u-flex u-items-center u-gap-1-5 u-min-w-0">
+								<span class="pr-detail-stat-value pr-detail-checkout-state u-fs-12 u-fw-600 u-font-mono u-leading-1-4 u-text-primary" :title="checkoutStatusTitle">{{ checkoutStatusText }}</span>
+								<a
+									v-if="cursorCheckoutHref"
+									:href="cursorCheckoutHref"
+									class="pr-detail-open-cursor-link u-flex-shrink-0 u-fs-11 u-fw-600"
+									:title="'Open ' + cursorCheckoutPath + ' in Cursor'"
+								>
+									Open in Cursor
+								</a>
 							</div>
 						</div>
 						<div class="pr-detail-stat pr-detail-stat-url u-flex u-flex-col u-gap-0-5">
@@ -173,11 +240,7 @@
 							v-for="item in sortedOverviewComments"
 							:key="item.key"
 							class="pr-detail-comment-block"
-							:class="{
-								'pr-detail-comment-issue'    : item.kind === 'issue',
-								'pr-detail-comment-review'   : item.kind !== 'issue',
-								'pr-detail-comment-resolved' : item.kind !== 'issue' && item.thread.resolved,
-							}"
+							:class="commentBlockClass(item)"
 						>
 							<template v-if="item.kind === 'issue'">
 								<div class="pr-detail-comment-meta u-flex u-flex-wrap u-items-center u-gap-2 u-mb-2">
@@ -256,7 +319,7 @@
 												v-if="item.thread.line != null"
 												type="button"
 												class="pr-overview-reply-hit pr-detail-thread-file-link-mini pr-detail-compact-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-py-0-5 u-px-2-5 u-fs-11 u-fw-600 u-cursor-pointer"
-												title="Switch to Files, jump to comment"
+												title="Switch to PR Files, jump to comment"
 												@click.stop="emitOpenReviewInFiles(item.thread)"
 											>
 												File
@@ -295,7 +358,7 @@
 												v-if="item.thread.line != null"
 												type="button"
 												class="pr-detail-thread-path-link pr-detail-compact-btn u-inline-flex u-items-baseline u-min-w-0 u-text-left u-p-0 u-m-0 u-border-none u-bg-transparent u-cursor-pointer"
-												title="Open this file at the comment in the Files tab"
+												title="Open this file at the comment in the PR Files tab"
 												@click="emitOpenReviewInFiles(item.thread)"
 											>
 												<span class="pr-detail-thread-path-text">{{ item.thread.path }}</span>
@@ -343,17 +406,15 @@
 							<div class="pr-detail-check-row u-flex u-items-center u-gap-2-5 u-w-full">
 								<span
 									class="pr-detail-check-icon u-flex-shrink-0"
-									:class="{
-										'check-passed'  : isCheckPassed(check),
-										'check-failed'  : isCheckFailed(check),
-										'check-pending' : !isCheckPassed(check) && !isCheckFailed(check),
-									}"
+									:class="checkIconClass(check)"
 									>{{ checkIcon(check) }}</span>
 								<span class="pr-detail-check-name u-min-w-0 u-flex-grow-1 u-truncate">
 									<a v-if="check.url" :href="check.url" target="_blank" rel="noopener">{{ check.name }}</a>
 									<span v-else>{{ check.name }}</span>
 								</span>
-								<span class="pr-detail-check-conclusion u-flex-shrink-0">{{ checkLabel(check) }}</span>
+								<span class="pr-detail-check-conclusion u-flex-shrink-0">
+									{{ checkLabel(check) }}<template v-if="checkDuration(check)"> · {{ checkDuration(check) }}</template>
+								</span>
 							</div>
 							<ul v-if="failureAnnotations(check).length" class="pr-detail-annotations u-list-none u-flex u-flex-col u-gap-1 u-w-full">
 								<li v-for="(ann, idx) in failureAnnotations(check)" :key="idx" class="pr-detail-annotation u-flex u-flex-col u-gap-0-5 u-py-1-5 u-px-2-5 u-fs-12">
@@ -391,14 +452,16 @@
 </template>
 
 <script lang="ts">
-import type { CheckAnnotation, CheckRunDetail, IssueComment, RepoLabel, ReviewComment } from '@/lib/api/githubClient';
-import GitHubClient, { isPullRequestConflicted, stripCommentTypePrefix }                from '@/lib/api/githubClient';
-import type { CommentThread }   from '@/lib/diff/prDiffTypes';
-import { renderGithubMarkdown } from '@/lib/githubMarkdown';
-import { iconSvg }              from '@/lib/icons';
-import { timeAgo }              from '@/lib/utils';
+import type { GitCheckout, GitWorkspaceStatus, LocalPrStatus, PullRequestCheckoutState } from '@/lib/api/gitCheckoutClient';
+import { checkoutStateForPr, checkoutTargetForPr } from '@/lib/api/gitCheckoutClient';
+import type { CheckAnnotation, CheckRunDetail, IssueComment, RepoLabel, ReviewComment }  from '@/lib/api/githubClient';
+import GitHubClient, { isPullRequestConflicted, stripCommentTypePrefix }                 from '@/lib/api/githubClient';
+import type { CommentThread }      from '@/lib/diff/prDiffTypes';
+import { renderGithubMarkdown }    from '@/lib/githubMarkdown';
+import { iconSvg }                 from '@/lib/icons';
+import { formatDuration, timeAgo, toCursorFileHref } from '@/lib/utils';
 
-import { Component, Prop, Vue } from 'vue-facing-decorator';
+import { Component, Prop, Vue, Watch } from 'vue-facing-decorator';
 
 interface OverviewThread {
 	id: number;
@@ -413,7 +476,7 @@ interface OverviewThread {
 
 type OverviewRow = { kind: 'issue'; key: string; sortTime: number; comment: IssueComment } | { kind: 'review-thread'; key: string; sortTime: number; thread: OverviewThread };
 
-@Component({ emits : [ 'add-label', 'remove-label', 'comments-updated', 'approve-pr', 'merge-pr', 'close-pr', 'toggle-draft', 'open-review-in-files' ] })
+@Component({ emits : [ 'add-label', 'remove-label', 'comments-updated', 'approve-pr', 'merge-pr', 'close-pr', 'toggle-draft', 'open-review-in-files', 'checkout-pr', 'commit-local-changes', 'push-local-changes' ] })
 export default class PrOverviewTab extends Vue {
 
 	@Prop({ required : true }) readonly pr!: any;
@@ -434,6 +497,13 @@ export default class PrOverviewTab extends Vue {
 	@Prop({ default : false }) readonly mergingPr!: boolean;
 	@Prop({ default : false }) readonly closingPr!: boolean;
 	@Prop({ default : false }) readonly togglingDraft!: boolean;
+	@Prop({ default : null }) readonly checkoutStatus!: GitWorkspaceStatus | null;
+	@Prop({ default : null }) readonly localPrStatus!: LocalPrStatus | null;
+	@Prop({ default : false }) readonly checkingOutPr!: boolean;
+	@Prop({ default : false }) readonly committingLocalChanges!: boolean;
+	@Prop({ default : false }) readonly pushingLocalChanges!: boolean;
+	@Prop({ default : '' }) readonly checkoutError!: string;
+	@Prop({ default : '' }) readonly localGitError!: string;
 
 	readonly timeAgo = timeAgo;
 
@@ -441,6 +511,10 @@ export default class PrOverviewTab extends Vue {
 	labelSearch = '';
 	/** Root review comment id while a resolve/unresolve request is in flight */
 	resolveTogglingThreadId: number | null = null;
+
+	/** Bumped every second while checks are in progress so elapsed times stay current. */
+	checkDurationTick = 0;
+	private _checkDurationTimer: ReturnType<typeof setInterval> | null = null;
 
 	/** Review thread ids whose resolved threads are shown expanded (default collapsed). */
 	resolvedThreadsExpanded: Record<number, true> = {};
@@ -454,6 +528,7 @@ export default class PrOverviewTab extends Vue {
 	issueReplyBody = '';
 	issueReplySubmitting = false;
 	prUrlCopyState: 'idle' | 'copied' = 'idle';
+	selectedWorktreePath = '';
 	private prUrlCopyResetId: number | null = null;
 
 	get reviewPopoverThreadPayload(): CommentThread | null {
@@ -529,7 +604,116 @@ export default class PrOverviewTab extends Vue {
 	}
 
 	get showActionsSection(): boolean {
+		return this.showPrActions || this.showGitActions;
+	}
+
+	get showPrActions(): boolean {
 		return this.showApproveAction || this.showMergeAction || this.showCloseAction || this.showDraftToggle;
+	}
+
+	get showGitActions(): boolean {
+		return this.showCheckoutAction || this.showLocalGitActions;
+	}
+
+	get checkoutState(): PullRequestCheckoutState | null {
+		return checkoutStateForPr(this.pr, this.checkoutStatus);
+	}
+
+	get checkoutWorkspaceReady(): boolean {
+		return this.checkoutStatus?.mode === 'single' || this.checkoutStatus?.mode === 'worktree-parent';
+	}
+
+	get showCheckoutAction(): boolean {
+		return Boolean(this.pr && this.pr.state === 'open' && !this.pr.merged && this.checkoutWorkspaceReady && checkoutTargetForPr(this.pr) && !this.checkoutState);
+	}
+
+	get showLocalGitActions(): boolean {
+		return Boolean(this.pr && this.pr.state === 'open' && !this.pr.merged && this.checkoutState);
+	}
+
+	get commitLocalDisabled(): boolean {
+		return this.committingLocalChanges || this.pushingLocalChanges || !this.localPrStatus?.hasLocalChanges;
+	}
+
+	get pushLocalDisabled(): boolean {
+		return this.pushingLocalChanges || this.committingLocalChanges || !this.localPrStatus?.hasUnpushedCommits;
+	}
+
+	get commitLocalTitle(): string {
+		if (this.localPrStatus?.hasLocalChanges) {
+			return 'Commit all current local changes in the checked-out pull request';
+		}
+		return 'No local changes to commit';
+	}
+
+	get pushLocalTitle(): string {
+		if (this.localPrStatus?.hasUnpushedCommits) {
+			const count = this.localPrStatus.aheadCount;
+			return `Push ${count} committed change${count === 1 ? '' : 's'} to the pull request branch`;
+		}
+		return 'No committed changes to push';
+	}
+
+	get worktreeOptions(): GitCheckout[] {
+		if (this.checkoutStatus?.mode !== 'worktree-parent') {
+			return [];
+		}
+		return this.checkoutStatus.checkouts;
+	}
+
+	get showWorktreeSelector(): boolean {
+		return this.checkoutStatus?.mode === 'worktree-parent';
+	}
+
+	get checkoutDisabled(): boolean {
+		if (this.checkingOutPr) {
+			return true;
+		}
+		if (this.showWorktreeSelector) {
+			return !this.selectedWorktreePath;
+		}
+		return false;
+	}
+
+	get checkoutStatusText(): string {
+		if (this.checkoutState) {
+			return this.checkoutState.shaMatches ? `Checked out in ${this.checkoutState.label}` : `Checked out in ${this.checkoutState.label} (behind PR head)`;
+		}
+		if (this.checkoutStatus?.mode === 'worktree-parent') {
+			return `${this.checkoutStatus.checkouts.length} worktrees available`;
+		}
+		if (this.checkoutStatus?.mode === 'single') {
+			return 'Checkout workspace ready';
+		}
+		return '';
+	}
+
+	get checkoutStatusTitle(): string {
+		if (this.checkoutState) {
+			return this.checkoutState.path;
+		}
+		return this.checkoutStatus?.workspaceDir || '';
+	}
+
+	get cursorCheckoutPath(): string {
+		return this.checkoutState?.hostPath || this.checkoutState?.path || '';
+	}
+
+	get cursorCheckoutHref(): string {
+		const path = this.cursorCheckoutPath;
+		return path ? toCursorFileHref(path) : '';
+	}
+
+	@Watch('checkoutStatus', { immediate : true, deep : true })
+	onCheckoutStatusChanged(): void {
+		if (!this.showWorktreeSelector) {
+			this.selectedWorktreePath = '';
+			return;
+		}
+		if (this.selectedWorktreePath && this.worktreeOptions.some(checkout => checkout.path === this.selectedWorktreePath && !checkout.dirty)) {
+			return;
+		}
+		this.selectedWorktreePath = this.worktreeOptions.find(checkout => !checkout.dirty)?.path || '';
 	}
 
 	get hasConflicts(): boolean {
@@ -603,6 +787,15 @@ export default class PrOverviewTab extends Vue {
 		return rows;
 	}
 
+	commentBlockClass(item: OverviewRow): string[] {
+		if (item.kind === 'issue') {
+			return [ 'pr-detail-comment-issue' ];
+		}
+		return item.thread.resolved
+			? [ 'pr-detail-comment-review', 'pr-detail-comment-resolved' ]
+			: [ 'pr-detail-comment-review' ];
+	}
+
 	isResolvedThreadExpanded(threadId: number): boolean {
 		return !!this.resolvedThreadsExpanded[threadId];
 	}
@@ -668,7 +861,7 @@ export default class PrOverviewTab extends Vue {
 				window.clearTimeout(this.prUrlCopyResetId);
 			}
 			this.prUrlCopyResetId = window.setTimeout(() => {
-				this.prUrlCopyState  = 'idle';
+				this.prUrlCopyState   = 'idle';
 				this.prUrlCopyResetId = null;
 			}, 2000);
 		}
@@ -726,6 +919,16 @@ export default class PrOverviewTab extends Vue {
 		return [ 'failure', 'timed_out', 'cancelled', 'error' ].includes(check.conclusion ?? '');
 	}
 
+	checkIconClass(check: CheckRunDetail): string {
+		if (this.isCheckPassed(check)) {
+			return 'check-passed';
+		}
+		if (this.isCheckFailed(check)) {
+			return 'check-failed';
+		}
+		return 'check-pending';
+	}
+
 	checkIcon(check: CheckRunDetail): string {
 		if (this.isCheckPassed(check)) {
 			return '✓';
@@ -747,6 +950,52 @@ export default class PrOverviewTab extends Vue {
 			return 'queued';
 		}
 		return 'pending';
+	}
+
+	checkDuration(check: CheckRunDetail): string | null {
+		void this.checkDurationTick;
+		if (!check.startedAt) {
+			return null;
+		}
+		const start = new Date(check.startedAt).getTime();
+		if (check.status === 'in_progress') {
+			return formatDuration(Date.now() - start);
+		}
+		if (check.status === 'completed' && check.completedAt) {
+			const end = new Date(check.completedAt).getTime();
+			return formatDuration(end - start);
+		}
+		return null;
+	}
+
+	get hasInProgressChecks(): boolean {
+		return this.checks.some(c => c.status === 'in_progress' && c.startedAt);
+	}
+
+	@Watch('checks', { immediate : true, deep : true })
+	onChecksChanged(): void {
+		if (this.hasInProgressChecks) {
+			this.startCheckDurationTimer();
+		}
+		else {
+			this.stopCheckDurationTimer();
+		}
+	}
+
+	startCheckDurationTimer(): void {
+		if (this._checkDurationTimer) {
+			return;
+		}
+		this._checkDurationTimer = setInterval(() => {
+			this.checkDurationTick++;
+		}, 1000);
+	}
+
+	stopCheckDurationTimer(): void {
+		if (this._checkDurationTimer) {
+			clearInterval(this._checkDurationTimer);
+			this._checkDurationTimer = null;
+		}
 	}
 
 	failureAnnotations(check: CheckRunDetail): CheckAnnotation[] {
@@ -865,6 +1114,7 @@ export default class PrOverviewTab extends Vue {
 
 	beforeUnmount() {
 		document.removeEventListener('mousedown', this.onOverviewPopoverOutside, true);
+		this.stopCheckDurationTimer();
 		if (this.prUrlCopyResetId != null) {
 			window.clearTimeout(this.prUrlCopyResetId);
 		}
@@ -873,6 +1123,10 @@ export default class PrOverviewTab extends Vue {
 	handleAddLabel(name: string) {
 		this.$emit('add-label', name);
 		this.labelDropdownOpen = false;
+	}
+
+	emitCheckout(): void {
+		this.$emit('checkout-pr', this.showWorktreeSelector ? this.selectedWorktreePath : undefined);
 	}
 
 }
@@ -895,7 +1149,27 @@ export default class PrOverviewTab extends Vue {
 	gap: var(--pr-overview-section-spacing);
 }
 
-.pr-detail-actions-buttons .pr-overview-action-btn {
+.pr-detail-action-groups {
+	padding: 8px 0;
+	border-block: 1px solid var(--border);
+}
+
+.pr-detail-action-row {
+	min-height: 34px;
+}
+
+.pr-detail-action-row + .pr-detail-action-row {
+	padding-top: 8px;
+	border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.pr-detail-action-label {
+	width: 92px;
+	text-align: left;
+	line-height: 1.3;
+}
+
+.pr-detail-action-row .pr-overview-action-btn {
 	border-radius: var(--radius-sm);
 	font-family: inherit;
 	transition: all var(--transition);
@@ -904,44 +1178,93 @@ export default class PrOverviewTab extends Vue {
 	color: var(--text-secondary);
 }
 
-.pr-detail-actions-buttons .pr-overview-action-btn:hover:not(:disabled) {
-	color: var(--text-primary);
-	border-color: var(--text-tertiary);
+.pr-detail-action-row .pr-overview-action-btn:hover:not(:disabled) {
+	filter: brightness(1.1);
 }
 
-.pr-detail-actions-buttons .pr-overview-action-btn:disabled {
-	opacity: 0.6;
+.pr-detail-action-row .pr-overview-action-btn:disabled {
+	background: var(--bg-primary) !important;
+	color: var(--text-tertiary) !important;
+	border-color: var(--border) !important;
+	opacity: 0.72;
 	cursor: default;
 }
 
-.pr-overview-action-approve {
+.pr-overview-action-approve:not(:disabled) {
 	border: none !important;
 	background: var(--accent-green) !important;
 	color: var(--btn-primary-fg) !important;
 }
 
-.pr-overview-action-approve:hover:not(:disabled) {
-	filter: brightness(1.12);
-}
-
-.pr-overview-action-merge {
+.pr-overview-action-merge:not(:disabled) {
 	border: none !important;
 	background: var(--accent-purple) !important;
 	color: var(--btn-primary-fg) !important;
 }
 
-.pr-overview-action-merge:hover:not(:disabled) {
-	filter: brightness(1.1);
+.pr-overview-action-close:not(:disabled) {
+	border: none !important;
+	background: var(--accent-red) !important;
+	color: var(--btn-primary-fg) !important;
 }
 
-.pr-overview-action-close {
-	border-color: var(--border) !important;
-	color: var(--accent-red) !important;
+.pr-overview-action-draft:not(:disabled) {
+	border: none !important;
+	background: var(--accent-orange) !important;
+	color: var(--btn-primary-fg) !important;
 }
 
-.pr-overview-action-close:hover:not(:disabled) {
-	background: var(--danger-bg-subtle) !important;
-	border-color: var(--accent-red) !important;
+.pr-overview-action-checkout:not(:disabled) {
+	border: none !important;
+	background: var(--accent-green) !important;
+	color: var(--btn-primary-fg) !important;
+}
+
+.pr-overview-action-commit:not(:disabled) {
+	border: none !important;
+	background: var(--accent-blue) !important;
+	color: var(--btn-primary-fg) !important;
+}
+
+.pr-overview-action-push:not(:disabled) {
+	border: none !important;
+	background: var(--accent-purple) !important;
+	color: var(--btn-primary-fg) !important;
+}
+
+.pr-overview-worktree-select {
+	max-width: 260px;
+	padding: 5px 28px 5px 10px;
+	background: var(--bg-primary);
+	color: var(--text-secondary);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	font-family: inherit;
+	cursor: pointer;
+	appearance: none;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16' fill='%238b949e'%3E%3Cpath d='M4.427 7.427l3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427Z'/%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-position: right 8px center;
+
+	&:hover:not(:disabled) {
+		border-color: var(--border-hover);
+		color: var(--text-primary);
+	}
+
+	&:disabled {
+		opacity: 0.65;
+		cursor: default;
+	}
+}
+
+.pr-overview-checkout-error {
+	color: var(--accent-red);
+}
+
+.pr-detail-checkout-state {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .pr-detail-conflict-alert {
@@ -972,12 +1295,24 @@ export default class PrOverviewTab extends Vue {
 
 .pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-url,
 .pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-branch,
+.pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-checkout,
 .pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-author {
+	display: grid;
 	flex: 1 1 100%;
+	grid-template-columns: 108px minmax(0, 1fr);
+	align-items: center;
+	column-gap: 12px;
 	text-align: left;
 }
 
-.pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat:not(.pr-detail-stat-url):not(.pr-detail-stat-branch):not(.pr-detail-stat-author) {
+.pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-url > .pr-detail-stat-label,
+.pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-branch > .pr-detail-stat-label,
+.pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-checkout > .pr-detail-stat-label,
+.pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-author > .pr-detail-stat-label {
+	white-space: nowrap;
+}
+
+.pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat:not(.pr-detail-stat-url):not(.pr-detail-stat-branch):not(.pr-detail-stat-checkout):not(.pr-detail-stat-author) {
 	flex: 1 1 0;
 	min-width: 0;
 	text-align: center;
@@ -1407,6 +1742,27 @@ html[data-color-scheme="light"] .pr-detail-overview .card > h2 {
 
 .pr-detail-stat-branch-wrap {
 	word-break: break-all;
+}
+
+.pr-detail-checkout-row {
+	max-width: 100%;
+}
+
+.pr-detail-checkout-state {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.pr-detail-open-cursor-link {
+	color: var(--accent-blue);
+	text-decoration: none;
+	white-space: nowrap;
+
+	&:hover {
+		text-decoration: underline;
+	}
 }
 
 .pr-detail-stat-url-row {

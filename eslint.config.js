@@ -5,7 +5,7 @@ import globals from "globals";
 import vueEslintParser from "vue-eslint-parser";
 
 export default [
-	{ ignores: ["node_modules/**", "dist/**", "build/**", "eslint.config.js"] },
+	{ ignores: ["node_modules/**", "dist/**", "build/**", "eslint.config.js", "scripts/prepare-http-decorators.mjs"] },
 	...lcb,
 	...pluginVue.configs["flat/recommended"],
 
@@ -33,11 +33,24 @@ export default [
 		},
 	},
 	{
-		files: ["src/server/**/*.ts", "vite.config.ts"],
+		files: ["src/server/**/*.ts"],
 		languageOptions: {
 			parser: tseslint.parser,
 			parserOptions: {
-				project: ["./tsconfig.node.json"],
+				project: ["./src/server/tsconfig.json"],
+				tsconfigRootDir: import.meta.dirname,
+			},
+			globals: { ...globals.node },
+		},
+	},
+	{
+		files: ["vite.config.ts"],
+		languageOptions: {
+			parser: tseslint.parser,
+			parserOptions: {
+				projectService: {
+					allowDefaultProject: ["vite.config.ts"],
+				},
 				tsconfigRootDir: import.meta.dirname,
 			},
 			globals: { ...globals.node },

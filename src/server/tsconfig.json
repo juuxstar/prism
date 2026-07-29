@@ -3,12 +3,13 @@
 		"target": "ES2022",
 		"module": "ESNext",
 		"moduleResolution": "bundler",
+		"experimentalDecorators": true,
 		"strict": true,
 		"esModuleInterop": true,
 		"skipLibCheck": true,
-		"rootDir": "src",
-		"outDir": "build",
+		"rootDir": "..",
+		"outDir": "../../build",
 		"noEmit": false
 	},
-	"include": ["src/server/**/*.ts"]
+	"include": ["**/*.ts"]
 }

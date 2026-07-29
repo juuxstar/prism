@@ -12,6 +12,7 @@
 				:hidden-labels="hiddenLabels"
 				:show-repo="showRepo"
 				:async-version="asyncVersion"
+				:checkout-status="checkoutStatus"
 				@open-pr="$emit('open-pr', $event)"
 			/>
 		</div>
@@ -19,6 +20,8 @@
 </template>
 
 <script lang="ts">
+import type { GitWorkspaceStatus } from '@/lib/api/gitCheckoutClient';
+
 import { Component, Prop, Vue } from 'vue-facing-decorator';
 
 /** Single column of PR items with a header, count badge, and drag-and-drop support. */
@@ -31,6 +34,7 @@ export default class PrColumn extends Vue {
 	@Prop({ required : true }) readonly section!: string;
 	@Prop({ required : true }) readonly showRepo!: boolean;
 	@Prop({ required : true }) readonly asyncVersion!: number;
+	@Prop({ default : null }) readonly checkoutStatus!: GitWorkspaceStatus | null;
 
 	dropOver = false;
 

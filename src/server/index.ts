@@ -4,63 +4,20 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { dirname, resolve }      from 'path';
 import { fileURLToPath }         from 'url';
 
-const moduleDir = dirname(fileURLToPath(import.meta.url));
+import { AuthApi }                         from './api/AuthApi.js';
+import { GitApi }                          from './api/GitApi.js';
+import { apiErrorHandler, wrapAsyncRoute } from './lib/httpErrors.js';
 
-const CLIENT_ID              = process.env.GITHUB_CLIENT_ID || 'Ov23li1HRzJJ8O56Pz5p';
-const DEVICE_CODE_URL        = 'https://github.com/login/device/code';
-const TOKEN_URL              = 'https://github.com/login/oauth/access_token';
-const REQUIRED_GITHUB_SCOPES = [ 'repo', 'read:org' ];
-const GITHUB_SCOPES          = [
-	...new Set([
-		...REQUIRED_GITHUB_SCOPES,
-		...(process.env.GITHUB_OAUTH_SCOPES || '').split(/\s+/).filter(Boolean),
-	]),
-].join(' ');
+const moduleDir              = dirname(fileURLToPath(import.meta.url));
+const CHECKOUT_WORKSPACE_DIR = process.env.PRISM_CHECKOUT_WORKSPACE_DIR || '/checkout-workspace';
+const CHECKOUT_HOST_DIR      = process.env.PRISM_CHECKOUT_HOST_DIR || undefined;
 
 const app = express();
-app.use(express.json());
-
-// --- GitHub App device-flow routes ---
-
-app.post('/api/auth/device-code', async function(_req, res) {
-	try {
-		const response = await fetch(DEVICE_CODE_URL, {
-			method  : 'POST',
-			headers : { 'Content-Type' : 'application/json', 'Accept' : 'application/json' },
-			body    : JSON.stringify({ client_id : CLIENT_ID, scope : GITHUB_SCOPES }),
-		});
-		res.json(await response.json());
-	}
-	catch (err: unknown) {
-		const message = err instanceof Error ? err.message : 'Unknown error';
-		res.status(502).json({ error : message });
-	}
-});
-
-app.post('/api/auth/poll-token', async function(req, res) {
-	try {
-		const deviceCode = (req.body as { device_code?: string }).device_code;
-		const response   = await fetch(TOKEN_URL, {
-			method  : 'POST',
-			headers : { 'Content-Type' : 'application/json', 'Accept' : 'application/json' },
-			body    : JSON.stringify({
-				client_id   : CLIENT_ID,
-				device_code : deviceCode,
-				grant_type  : 'urn:ietf:params:oauth:grant-type:device_code',
-			}),
-		});
-		res.json(await response.json());
-	}
-	catch (err: unknown) {
-		const message = err instanceof Error ? err.message : 'Unknown error';
-		res.status(502).json({ error : message });
-	}
-});
-
-// --- GitHub API proxy ---
-
+app.use('/api/auth', new AuthApi().getRouter({ wrapHandler : wrapAsyncRoute }));
+app.use('/api/git', new GitApi(CHECKOUT_WORKSPACE_DIR, CHECKOUT_HOST_DIR).getRouter({ wrapHandler : wrapAsyncRoute }));
 app.use(
 	'/api/github',
+	express.json(),
 	createProxyMiddleware({
 		target       : 'https://api.github.com',
 		changeOrigin : true,
@@ -84,18 +41,36 @@ app.use(
 		},
 	})
 );
+app.use('/api', apiErrorHandler);
 
-// --- Serve SPA in production ---
+// --- Serve SPA: Vite dev proxy in development, static dist in production ---
 
-const distDir = resolve(moduleDir, '..', '..', 'dist');
-if (existsSync(distDir)) {
+const isDev            = process.env.NODE_ENV === 'development';
+const viteDevServerUrl = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
+const distDir          = resolve(moduleDir, '..', '..', 'dist');
+let viteProxy: ReturnType<typeof createProxyMiddleware> | undefined;
+
+if (isDev) {
+	viteProxy = createProxyMiddleware({
+		target       : viteDevServerUrl,
+		changeOrigin : true,
+		ws           : true,
+	});
+	app.use(viteProxy);
+}
+else if (existsSync(distDir)) {
 	app.use(express.static(distDir));
 	app.get('*', (_req, res) => {
 		res.sendFile(resolve(distDir, 'index.html'));
 	});
 }
 
-const PORT = parseInt(process.env.PORT || '3002', 10);
-app.listen(PORT, () => {
-	console.log(`Server listening on http://localhost:${PORT}`);
+const PORT   = parseInt(process.env.PORT || '3002', 10);
+const server = app.listen(PORT, () => {
+	const mode = isDev ? `development (proxying UI to ${viteDevServerUrl})` : 'production';
+	console.log(`Server listening on http://localhost:${PORT} [${mode}]`);
 });
+
+if (viteProxy) {
+	server.on('upgrade', viteProxy.upgrade);
+}

@@ -1,0 +1,29 @@
+services:
+  prism:
+    build: .
+    image: ${PRISM_IMAGE:-prism:local}
+    container_name: prism
+    restart: unless-stopped
+    environment:
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-Ov23li1HRzJJ8O56Pz5p}
+      NODE_ENV: production
+      PORT: "3002"
+      PRISM_CHECKOUT_WORKSPACE_DIR: ${PRISM_CHECKOUT_WORKSPACE_DIR:-/checkout-workspace}
+      PRISM_CHECKOUT_HOST_DIR: ${PRISM_CHECKOUT_HOST_DIR:-/Users/juuxstar/code/frontLobby/frontlobby}
+    volumes:
+      - ${PRISM_CHECKOUT_HOST_DIR:-/Users/juuxstar/code/frontLobby/frontlobby}:${PRISM_CHECKOUT_WORKSPACE_DIR:-/checkout-workspace}
+    expose:
+      - "3002"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prism.rule=Host(`prism.localhost`) || Host(`prism.dev.localhost`)"
+      - "traefik.http.routers.prism.priority=100"
+      - "traefik.http.routers.prism.entrypoints=websecure"
+      - "traefik.http.routers.prism.tls=true"
+      - "traefik.http.services.prism.loadbalancer.server.port=3002"
+    networks:
+      - web-proxy
+
+networks:
+  web-proxy:
+    external: true

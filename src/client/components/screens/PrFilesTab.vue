@@ -38,9 +38,41 @@
 		</div>
 
 		<template v-else-if="files.length">
-			<pr-files-nav-bar v-model:current-index="currentIndex" :files="files" :viewed-files="viewedFiles" @toggle-viewed="toggleViewed" />
+			<pr-files-nav-bar v-model:current-index="currentIndex" :files="files" :viewed-files="viewedFiles" :show-viewed-controls="viewedEnabled" @toggle-viewed="toggleViewed" />
 
 			<div v-if="contentLoading" class="pr-diff-content-loading"><span class="async-loader"></span> Loading file contents...</div>
+
+			<div v-else-if="hasMediaContent" class="pr-diff-viewer" :class="{ 'pr-diff-viewer-split': !isAddedOrRemoved }">
+				<pr-media-viewer
+					:split="!isAddedOrRemoved"
+					:left-src="baseMediaUrl"
+					:right-src="headMediaUrl"
+					:left-mime="baseMediaMime"
+					:right-mime="headMediaMime"
+					:single-src="singleMediaUrl"
+					:single-mime="singleMediaMime"
+					left-label="Before"
+					right-label="After"
+				/>
+			</div>
+
+			<div v-else-if="isAddedMarkdownFile" class="pr-diff-viewer pr-diff-viewer-split">
+				<div class="pr-diff-markdown-split">
+					<div class="pr-diff-panel pr-diff-panel-right pr-diff-markdown-source u-min-w-0">
+						<pr-diff-table
+							:lines="singlePanelLines"
+							side="RIGHT"
+							:has-any-comment-at="hasAnyCommentAt"
+							:comment-dot-class="commentDotClass"
+							@gutter-click="onGutterClick"
+						/>
+					</div>
+					<div class="pr-diff-divider u-flex-shrink-0"></div>
+					<div class="pr-diff-markdown-preview-pane u-min-w-0">
+						<div class="markdown-body pr-diff-markdown-preview" v-html="renderedMarkdown"></div>
+					</div>
+				</div>
+			</div>
 
 			<div v-else-if="hasFullContent" class="pr-diff-viewer" :class="{ 'pr-diff-viewer-split' : !isAddedOrRemoved, 'pr-diff-viewer-with-minimap' : isAddedOrRemoved }">
 				<template v-if="isAddedOrRemoved">
@@ -133,10 +165,10 @@
 			<div v-else class="pr-diff-binary">Binary file not shown</div>
 		</template>
 
-		<p v-else class="pr-files-empty">No files changed</p>
+		<p v-else class="pr-files-empty">{{ emptyMessage }}</p>
 
 		<comment-popover
-			v-if="activeComment"
+			v-if="reviewEnabled && activeComment"
 			:thread="activeThread"
 			:pending-comment="activePending"
 			:path="activeComment.path"
@@ -161,6 +193,7 @@
 import DiffMinimap                            from '@/components/pr/DiffMinimap.vue';
 import PrDiffTable                            from '@/components/pr/PrDiffTable.vue';
 import PrFilesNavBar                          from '@/components/pr/PrFilesNavBar.vue';
+import PrMediaViewer                          from '@/components/pr/PrMediaViewer.vue';
 import type { PendingComment, PRFile, ReviewComment } from '@/lib/api/githubClient';
 import GitHubClient                           from '@/lib/api/githubClient';
 import { parseCommentType }                   from '@/lib/api/githubClient';
@@ -168,12 +201,20 @@ import { buildConnectorPaths, buildScrollSegmentsFromState, maxVirtualScrollTop,
 import { buildSplitLinesForFile, parsePatch } from '@/lib/diff/diffLineBuilder';
 import { computeCommonBlocks }                from '@/lib/diff/patchDiff';
 import type { CommentThread, DiffLine, ScrollSegment } from '@/lib/diff/prDiffTypes';
+import { renderGithubMarkdown }              from '@/lib/githubMarkdown';
+import { base64ToDataUrl, isRenderableMediaPaths, mediaMimeType } from '@/lib/mediaFiles';
 
 import { Component, Prop, Vue, Watch } from 'vue-facing-decorator';
 
 export interface ReviewThreadFocusRequest { path: string; line: number; side: 'LEFT' | 'RIGHT'; nonce: number }
+export interface PrFileContent {
+	base: string | null;
+	head: string | null;
+	encoding?: 'text' | 'base64';
+}
+export type PrFileContentLoader = (file: PRFile) => Promise<PrFileContent>;
 
-@Component({ components : { DiffMinimap, PrDiffTable, PrFilesNavBar }, emits : [ 'update:fileIndex', 'update:viewed', 'add-pending', 'remove-pending', 'edit-pending', 'comments-updated', 'thread-focus-handled' ] })
+@Component({ components : { DiffMinimap, PrDiffTable, PrFilesNavBar, PrMediaViewer }, emits : [ 'update:fileIndex', 'update:viewed', 'all-viewed', 'add-pending', 'remove-pending', 'edit-pending', 'comments-updated', 'thread-focus-handled' ] })
 export default class PrFilesTab extends Vue {
 
 	@Prop({ required : true }) readonly files!: PRFile[];
@@ -193,12 +234,17 @@ export default class PrFilesTab extends Vue {
 	@Prop({ default : () => [] }) readonly reviewComments!: ReviewComment[];
 	@Prop({ default : () => [] }) readonly pendingComments!: PendingComment[];
 	@Prop({ default : '' }) readonly commitId!: string;
+	@Prop({ default : true }) readonly reviewEnabled!: boolean;
+	@Prop({ default : true }) readonly viewedEnabled!: boolean;
+	@Prop({ default : 'No files changed' }) readonly emptyMessage!: string;
+	@Prop({ default : null }) readonly fileContentLoader!: PrFileContentLoader | null;
 	/** When present, selects the file and scrolls to the line — used from Overview navigation. */
 	@Prop({ default : null }) readonly threadFocusRequest!: ReviewThreadFocusRequest | null;
 
 	currentIndex = 0;
 	baseContent: string | null = null;
 	headContent: string | null = null;
+	contentEncoding: 'text' | 'base64' = 'text';
 	contentLoading = false;
 	leftScrollTop = 0;
 	rightScrollTop = 0;
@@ -208,7 +254,7 @@ export default class PrFilesTab extends Vue {
 
 	activeComment: { path: string; line: number; side: 'LEFT' | 'RIGHT'; rect: DOMRect; lineContent: string } | null = null;
 
-	private _contentCache = new Map<string, { base: string | null; head: string | null }>();
+	private _contentCache = new Map<string, PrFileContent>();
 	private _loadId = 0;
 	private _resizeHandler = () => {
 		this.measureViewportHeight();
@@ -268,8 +314,14 @@ export default class PrFilesTab extends Vue {
 	}
 
 	async toggleViewed() {
+		if (!this.viewedEnabled) {
+			return;
+		}
 		const file = this.currentFile;
-		if (!file || !this.prNodeId) {
+		if (!file) {
+			return;
+		}
+		if (this.reviewEnabled && !this.prNodeId) {
 			return;
 		}
 		const filename    = file.filename;
@@ -277,6 +329,20 @@ export default class PrFilesTab extends Vue {
 		const newState    = wasViewed ? 'UNVIEWED' : 'VIEWED';
 		const indexBefore = this.currentIndex;
 		this.$emit('update:viewed', { filename, state : newState });
+		if (!this.reviewEnabled) {
+			if (!wasViewed) {
+				this.$nextTick(() => {
+					const next = this.findNextUnviewedFileIndex(indexBefore);
+					if (next !== -1) {
+						this.currentIndex = next;
+					}
+					else {
+						this.$emit('all-viewed');
+					}
+				});
+			}
+			return;
+		}
 		try {
 			if (wasViewed) {
 				await GitHubClient.unmarkFileAsViewed(this.prNodeId, filename);
@@ -295,6 +361,9 @@ export default class PrFilesTab extends Vue {
 				if (next !== -1) {
 					this.currentIndex = next;
 				}
+				else {
+					this.$emit('all-viewed');
+				}
 			});
 		}
 	}
@@ -303,7 +372,83 @@ export default class PrFilesTab extends Vue {
 		return this.currentFile?.status === 'added' || this.currentFile?.status === 'removed';
 	}
 
+	get isAddedMarkdownFile(): boolean {
+		return this.currentFile?.status === 'added'
+			&& /\.md$/i.test(this.currentFile.filename)
+			&& this.headContent !== null;
+	}
+
+	get renderedMarkdown(): string {
+		return renderGithubMarkdown(this.headContent ?? '');
+	}
+
+	get isMediaFile(): boolean {
+		const file = this.currentFile;
+		if (!file) {
+			return false;
+		}
+		return isRenderableMediaPaths(file.filename, file.previous_filename);
+	}
+
+	get hasMediaContent(): boolean {
+		if (!this.isMediaFile || this.contentEncoding !== 'base64') {
+			return false;
+		}
+		const file = this.currentFile;
+		if (!file) {
+			return false;
+		}
+		if (file.status === 'added') {
+			return this.headContent !== null;
+		}
+		if (file.status === 'removed') {
+			return this.baseContent !== null;
+		}
+		return this.baseContent !== null || this.headContent !== null;
+	}
+
+	get baseMediaMime(): string | null {
+		const path = this.currentFile?.previous_filename || this.currentFile?.filename;
+		return path ? mediaMimeType(path) : null;
+	}
+
+	get headMediaMime(): string | null {
+		const path = this.currentFile?.filename;
+		return path ? mediaMimeType(path) : null;
+	}
+
+	get baseMediaUrl(): string | null {
+		if (!this.baseContent || !this.baseMediaMime) {
+			return null;
+		}
+		return base64ToDataUrl(this.baseContent, this.baseMediaMime);
+	}
+
+	get headMediaUrl(): string | null {
+		if (!this.headContent || !this.headMediaMime) {
+			return null;
+		}
+		return base64ToDataUrl(this.headContent, this.headMediaMime);
+	}
+
+	get singleMediaUrl(): string | null {
+		if (this.currentFile?.status === 'removed') {
+			return this.baseMediaUrl;
+		}
+		return this.headMediaUrl;
+	}
+
+	get singleMediaMime(): string | null {
+		if (this.currentFile?.status === 'removed') {
+			return this.baseMediaMime;
+		}
+		return this.headMediaMime;
+	}
+
 	get hasFullContent(): boolean {
+		if (this.isMediaFile) {
+			return false;
+		}
 		const file = this.currentFile;
 		if (!file) {
 			return false;
@@ -448,6 +593,7 @@ export default class PrFilesTab extends Vue {
 		this._contentCache.clear();
 		this.baseContent      = null;
 		this.headContent      = null;
+		this.contentEncoding  = 'text';
 		this.virtualScrollTop = 0;
 		if (!this._filesInitialized && this.files.length) {
 			this._filesInitialized = true;
@@ -726,8 +872,9 @@ export default class PrFilesTab extends Vue {
 		const cacheKey = file.filename;
 		const cached   = this._contentCache.get(cacheKey);
 		if (cached) {
-			this.baseContent = cached.base;
-			this.headContent = cached.head;
+			this.baseContent     = cached.base;
+			this.headContent     = cached.head;
+			this.contentEncoding = cached.encoding ?? 'text';
 			this.$nextTick(() => {
 				this.measureLineHeight();
 				this.measureViewportHeight();
@@ -736,16 +883,41 @@ export default class PrFilesTab extends Vue {
 			return;
 		}
 
-		const loadId        = ++this._loadId;
-		this.contentLoading = true;
-		this.baseContent    = null;
-		this.headContent    = null;
+		const loadId         = ++this._loadId;
+		this.contentLoading  = true;
+		this.baseContent     = null;
+		this.headContent     = null;
+		this.contentEncoding = 'text';
 
 		try {
-			let base: string | null = null;
-			let head: string | null = null;
+			let base: string | null     = null;
+			let head: string | null     = null;
+			let encoding: 'text' | 'base64' = 'text';
 
-			if (file.status === 'added') {
+			if (this.fileContentLoader) {
+				const content = await this.fileContentLoader(file);
+				base          = content.base;
+				head          = content.head;
+				encoding      = content.encoding ?? 'text';
+			}
+			else if (this.isMediaFile) {
+				encoding = 'base64';
+				if (file.status === 'added') {
+					head = await GitHubClient.fetchFileContentBase64(this.owner, this.repo, file.filename, this.headRef);
+				}
+				else if (file.status === 'removed') {
+					const basePath = file.previous_filename || file.filename;
+					base           = await GitHubClient.fetchFileContentBase64(this.owner, this.repo, basePath, this.baseRef);
+				}
+				else {
+					const basePath = file.previous_filename || file.filename;
+					[ base, head ] = await Promise.all([
+						GitHubClient.fetchFileContentBase64(this.owner, this.repo, basePath, this.baseRef),
+						GitHubClient.fetchFileContentBase64(this.owner, this.repo, file.filename, this.headRef),
+					]);
+				}
+			}
+			else if (file.status === 'added') {
 				head = await GitHubClient.fetchFileContent(this.owner, this.repo, file.filename, this.headRef);
 			}
 			else if (file.status === 'removed') {
@@ -763,9 +935,10 @@ export default class PrFilesTab extends Vue {
 			if (this._loadId !== loadId) {
 				return;
 			}
-			this.baseContent = base;
-			this.headContent = head;
-			this._contentCache.set(cacheKey, { base, head });
+			this.baseContent     = base;
+			this.headContent     = head;
+			this.contentEncoding = encoding;
+			this._contentCache.set(cacheKey, { base, head, encoding });
 		}
 		catch {
 			if (this._loadId !== loadId) {
@@ -928,6 +1101,9 @@ export default class PrFilesTab extends Vue {
 	}
 
 	hasAnyCommentAt(lineNum: number | null, side: 'LEFT' | 'RIGHT'): boolean {
+		if (!this.reviewEnabled) {
+			return false;
+		}
 		return this.hasThreadAt(lineNum, side) || this.hasPendingAt(lineNum, side);
 	}
 
@@ -983,6 +1159,9 @@ export default class PrFilesTab extends Vue {
 	}
 
 	onGutterClick(line: DiffLine, side: 'LEFT' | 'RIGHT', event: MouseEvent) {
+		if (!this.reviewEnabled) {
+			return;
+		}
 		if (line.num == null) {
 			return;
 		}
@@ -1061,6 +1240,12 @@ export default class PrFilesTab extends Vue {
 <style>
 @import "@/styles/pr-diff.css";
 
+.pr-files-tab {
+	width: 100%;
+	min-width: 0;
+	align-self: stretch;
+}
+
 .pr-files-empty {
 	color: var(--text-tertiary);
 	font-size: 13px;
@@ -1070,12 +1255,20 @@ export default class PrFilesTab extends Vue {
 
 .pr-files-skeleton {
 	width: 100%;
+	min-width: 0;
+	align-self: stretch;
 	pointer-events: none;
 }
 
 .pr-files-skeleton-nav {
 	width: 100%;
+	box-sizing: border-box;
+	height: 40px;
+	padding: 0 var(--u-2);
 	margin-bottom: 8px;
+	background: var(--bg-secondary);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
 }
 
 .pr-files-skeleton-nav-btn {
@@ -1107,9 +1300,11 @@ export default class PrFilesTab extends Vue {
 
 .pr-files-skeleton-viewer {
 	width: 100%;
+	min-width: 0;
 	min-height: 0;
 	margin-top: 0;
 	background: var(--bg-primary);
+	box-sizing: border-box;
 }
 
 .pr-files-skeleton-split {

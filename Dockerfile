@@ -4,7 +4,10 @@ FROM node:24-alpine AS build
 
 WORKDIR /app
 
+RUN apk add --no-cache git
+
 COPY package*.json ./
+COPY scripts/prepare-http-decorators.mjs ./scripts/prepare-http-decorators.mjs
 RUN npm ci
 
 COPY . .
@@ -17,9 +20,11 @@ ENV PORT=3002
 
 WORKDIR /app
 
+RUN apk add --no-cache git
 RUN addgroup -S app && adduser -S app -G app
 
 COPY package*.json ./
+COPY scripts/prepare-http-decorators.mjs ./scripts/prepare-http-decorators.mjs
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/build ./build

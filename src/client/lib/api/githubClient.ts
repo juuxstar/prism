@@ -1,73 +1,3 @@
-function rateLimitResetFromHeaders(resetHeader: string | null, retryAfter: string | null): Date | null {
-	if (resetHeader) {
-		return new Date(parseInt(resetHeader, 10) * 1000);
-	}
-	if (retryAfter) {
-		return new Date(Date.now() + parseInt(retryAfter, 10) * 1000);
-	}
-	return null;
-}
-
-/** Build a readable message from GitHub REST error JSON (`message` + `errors`). */
-function formatGithubRestErrorMessage(status: number, body: any): string {
-	const fallback = `GitHub API error: ${status}`;
-	if (!body || typeof body !== 'object') {
-		return fallback;
-	}
-	const main             = typeof body.message === 'string' && body.message.trim() ? body.message.trim() : '';
-	const pieces: string[] = [];
-	if (Array.isArray(body.errors)) {
-		for (const e of body.errors) {
-			if (typeof e === 'string' && e.trim()) {
-				pieces.push(e.trim());
-			}
-			else if (e && typeof e === 'object' && typeof (e as { message?: string }).message === 'string') {
-				const m = (e as { message: string }).message.trim();
-				if (m) {
-					pieces.push(m);
-				}
-			}
-		}
-	}
-	if (main && pieces.length) {
-		return `${main}: ${pieces.join('; ')}`;
-	}
-	if (pieces.length) {
-		return pieces.join('; ');
-	}
-	if (main) {
-		return main;
-	}
-	return fallback;
-}
-
-/**
- * GitHub merged PRs include `merged_at` and `merge_commit_sha`; `merged` can be missing or wrong in some responses.
- * Derive a reliable boolean so the UI does not show merged work as still open.
- */
-function normalizePullRequest(pr: any): any {
-	if (!pr || typeof pr !== 'object') {
-		return pr;
-	}
-	// Never treat as merged when GitHub says it was closed without merging.
-	if (pr.merged === false || pr.merged === 'false') {
-		return { ...pr, merged : false };
-	}
-	// Do not use `merge_commit_sha` alone: it can be set for test merges or other cases on closed, unmerged PRs.
-	const merged
-		= pr.merged === true
-		|| pr.merged === 'true'
-		|| (pr.merged_at != null && pr.merged_at !== '');
-	return { ...pr, merged : Boolean(merged) };
-}
-
-export function isPullRequestConflicted(pr: any): boolean {
-	if (!pr || typeof pr !== 'object') {
-		return false;
-	}
-	return pr.mergeable === false || pr.mergeable_state === 'dirty';
-}
-
 class GitHubAPI {
 
 	private token: string | null = null;
@@ -401,7 +331,7 @@ class GitHubAPI {
 	}
 
 	async fetchPRStats(prs: any[]) {
-		const toFetch          = prs.filter(pr => !this.prStatsCache.has(pr.id));
+		const toFetch          = prs.filter(pr => !this.prStatsCache.has(pr.id) || !pr.head || !pr.base);
 		const batches: any[][] = [];
 		for (let i = 0; i < toFetch.length; i += 10) {
 			batches.push(toFetch.slice(i, i + 10));
@@ -413,6 +343,8 @@ class GitHubAPI {
 					const repo = pr.repository_url.match(/repos\/(.+)/)![1];
 					try {
 						const data = await this.apiFetch(`/repos/${repo}/pulls/${pr.number}`);
+						pr.head    = data.head;
+						pr.base    = data.base;
 						return {
 							id           : pr.id as number,
 							stats        : { changedFiles : data.changed_files, additions : data.additions, deletions : data.deletions } as PRStats,
@@ -651,8 +583,8 @@ class GitHubAPI {
 		return body;
 	}
 
-	/** PATCH pull request (title, draft, state, etc.). Returns updated PR JSON. */
-	async updatePullRequest(owner: string, repo: string, number: number, patch: { title?: string; draft?: boolean; state?: 'open' | 'closed' }): Promise<any> {
+	/** PATCH pull request (title, state, etc.). Returns updated PR JSON. Draft changes use `setPullRequestDraft`. */
+	async updatePullRequest(owner: string, repo: string, number: number, patch: { title?: string; state?: 'open' | 'closed' }): Promise<any> {
 		const response = await fetch(`${this.apiBase}/repos/${owner}/${repo}/pulls/${number}`, {
 			method  : 'PATCH',
 			headers : {
@@ -674,6 +606,27 @@ class GitHubAPI {
 		return body;
 	}
 
+	/** Toggle draft state via GraphQL (REST PATCH does not support draft transitions). */
+	async setPullRequestDraft(pullRequestId: string, draft: boolean): Promise<{ draft: boolean }> {
+		const MUTATION = draft
+			? `
+	  mutation($pullRequestId: ID!) {
+		convertPullRequestToDraft(input: { pullRequestId: $pullRequestId }) {
+		  pullRequest { isDraft }
+		}
+	  }`
+			: `
+	  mutation($pullRequestId: ID!) {
+		markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
+		  pullRequest { isDraft }
+		}
+	  }`;
+		const data    = await this.graphql(MUTATION, { pullRequestId });
+		const key     = draft ? 'convertPullRequestToDraft' : 'markPullRequestReadyForReview';
+		const isDraft = data[key]?.pullRequest?.isDraft;
+		return { draft : Boolean(isDraft) };
+	}
+
 	async fetchPRFiles(owner: string, repo: string, number: number): Promise<PRFile[]> {
 		return this.fetchAllPages(`/repos/${owner}/${repo}/pulls/${number}/files`);
 	}
@@ -681,6 +634,11 @@ class GitHubAPI {
 	async fetchFileContent(owner: string, repo: string, path: string, ref: string): Promise<string> {
 		const data = await this.apiFetch(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`);
 		return atob(data.content.replace(/\n/g, ''));
+	}
+
+	async fetchFileContentBase64(owner: string, repo: string, path: string, ref: string): Promise<string> {
+		const data = await this.apiFetch(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`);
+		return data.content.replace(/\n/g, '');
 	}
 
 	async fetchDetailedChecks(owner: string, repo: string, number: number): Promise<CheckRunDetail[]> {
@@ -699,6 +657,8 @@ class GitHubAPI {
 						  status
 						  conclusion
 						  detailsUrl
+						  startedAt
+						  completedAt
 						  annotations(first: 50) {
 							nodes {
 							  path
@@ -742,10 +702,12 @@ class GitHubAPI {
 					endLine   : a.location?.end?.line ?? 0,
 				}));
 				return {
-					name       : ctx.name,
-					status     : (ctx.status || '').toLowerCase(),
-					conclusion : ctx.conclusion ? ctx.conclusion.toLowerCase() : null,
-					url        : ctx.detailsUrl || null,
+					name        : ctx.name,
+					status      : (ctx.status || '').toLowerCase(),
+					conclusion  : ctx.conclusion ? ctx.conclusion.toLowerCase() : null,
+					url         : ctx.detailsUrl || null,
+					startedAt   : ctx.startedAt || null,
+					completedAt : ctx.completedAt || null,
 					annotations,
 				};
 			}
@@ -754,6 +716,8 @@ class GitHubAPI {
 				status      : 'completed',
 				conclusion  : ctx.state ? ctx.state.toLowerCase() : null,
 				url         : ctx.targetUrl || null,
+				startedAt   : null,
+				completedAt : null,
 				annotations : [],
 			};
 		});
@@ -1018,6 +982,76 @@ class GitHubAPI {
 export const GitHubClient = new GitHubAPI();
 export default GitHubClient;
 
+function rateLimitResetFromHeaders(resetHeader: string | null, retryAfter: string | null): Date | null {
+	if (resetHeader) {
+		return new Date(parseInt(resetHeader, 10) * 1000);
+	}
+	if (retryAfter) {
+		return new Date(Date.now() + parseInt(retryAfter, 10) * 1000);
+	}
+	return null;
+}
+
+/** Build a readable message from GitHub REST error JSON (`message` + `errors`). */
+function formatGithubRestErrorMessage(status: number, body: any): string {
+	const fallback = `GitHub API error: ${status}`;
+	if (!body || typeof body !== 'object') {
+		return fallback;
+	}
+	const main             = typeof body.message === 'string' && body.message.trim() ? body.message.trim() : '';
+	const pieces: string[] = [];
+	if (Array.isArray(body.errors)) {
+		for (const e of body.errors) {
+			if (typeof e === 'string' && e.trim()) {
+				pieces.push(e.trim());
+			}
+			else if (e && typeof e === 'object' && typeof (e as { message?: string }).message === 'string') {
+				const m = (e as { message: string }).message.trim();
+				if (m) {
+					pieces.push(m);
+				}
+			}
+		}
+	}
+	if (main && pieces.length) {
+		return `${main}: ${pieces.join('; ')}`;
+	}
+	if (pieces.length) {
+		return pieces.join('; ');
+	}
+	if (main) {
+		return main;
+	}
+	return fallback;
+}
+
+/**
+ * GitHub merged PRs include `merged_at` and `merge_commit_sha`; `merged` can be missing or wrong in some responses.
+ * Derive a reliable boolean so the UI does not show merged work as still open.
+ */
+function normalizePullRequest(pr: any): any {
+	if (!pr || typeof pr !== 'object') {
+		return pr;
+	}
+	// Never treat as merged when GitHub says it was closed without merging.
+	if (pr.merged === false || pr.merged === 'false') {
+		return { ...pr, merged : false };
+	}
+	// Do not use `merge_commit_sha` alone: it can be set for test merges or other cases on closed, unmerged PRs.
+	const merged
+		= pr.merged === true
+		|| pr.merged === 'true'
+		|| (pr.merged_at != null && pr.merged_at !== '');
+	return { ...pr, merged : Boolean(merged) };
+}
+
+export function isPullRequestConflicted(pr: any): boolean {
+	if (!pr || typeof pr !== 'object') {
+		return false;
+	}
+	return pr.mergeable === false || pr.mergeable_state === 'dirty';
+}
+
 function apiError(msg: string, extra?: Partial<ApiError>): ApiError {
 	const err = new Error(msg) as ApiError;
 	if (extra) {
@@ -1080,6 +1114,8 @@ export interface CheckRunDetail {
 	status: 'completed' | 'in_progress' | 'queued' | string;
 	conclusion: string | null;
 	url: string | null;
+	startedAt: string | null;
+	completedAt: string | null;
 	annotations: CheckAnnotation[];
 }
 

@@ -12,12 +12,7 @@
 						<a v-else href="/" class="pr-detail-back u-flex-shrink-0" title="Back to dashboard">&larr;</a>
 						<span
 							class="pr-detail-badge u-flex-shrink-0"
-							:class="{
-								'pr-detail-badge-draft'  : pr.draft,
-								'pr-detail-badge-merged' : !pr.draft && pr.merged,
-								'pr-detail-badge-closed' : !pr.draft && !pr.merged && pr.state === 'closed',
-								'pr-detail-badge-open'   : !pr.draft && !pr.merged && pr.state === 'open',
-							}"
+							:class="prStatusBadgeClass"
 							>{{ prStatusBadgeText }}</span>
 						<div class="pr-detail-header-title-block u-flex u-items-center u-min-w-0 u-flex-grow-1 u-gap-2">
 							<div class="pr-detail-title-edit-group u-flex u-items-center u-min-w-0 u-flex-1 u-gap-1">
@@ -37,7 +32,14 @@
 						</div>
 					</div>
 					<div class="pr-detail-header-center u-flex u-items-center u-justify-center u-flex-1">
-						<pr-detail-tab-bar :active-tab="activeTab" :changed-files-count="pr.changed_files" :files-length="files.length" :review-pct="reviewPct" @switch-tab="switchTab" />
+						<pr-detail-tab-bar
+							:active-tab="activeTab"
+							:local-files-count="localFiles.length"
+							:changed-files-count="pr.changed_files"
+							:files-length="files.length"
+							:review-pct="reviewPct"
+							@switch-tab="switchTab"
+						/>
 						<button
 							v-if="showMarkWhitespaceViewedButton"
 							type="button"
@@ -50,6 +52,18 @@
 						</button>
 					</div>
 					<div class="pr-detail-header-right u-flex u-items-center u-gap-3 u-flex-1 u-justify-end">
+						<button
+							type="button"
+							class="pr-detail-header-refresh-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-cursor-pointer u-whitespace-nowrap"
+							:class="{ spinning : refreshingOverview }"
+							:disabled="refreshingOverview"
+							:title="refreshingOverview ? 'Refreshing pull request data' : 'Refresh pull request data'"
+							:aria-label="refreshingOverview ? 'Refreshing pull request data' : 'Refresh pull request data'"
+							@click="refreshOverview"
+						>
+							<span class="u-flex u-items-center u-justify-center" aria-hidden="true" v-html="$icon('refresh', 14)"></span>
+							<span>{{ refreshingOverview ? 'Refreshing' : 'Refresh' }}</span>
+						</button>
 						<template v-if="pendingComments.length">
 							<button
 								class="pr-review-discard-btn u-inline-flex u-items-center u-justify-center u-cursor-pointer"
@@ -91,6 +105,13 @@
 						:merging-pr="mergingPr"
 						:closing-pr="closingPr"
 						:toggling-draft="togglingDraft"
+						:checkout-status="checkoutStatus"
+						:local-pr-status="localPrStatus"
+						:committing-local-changes="committingLocalChanges"
+						:pushing-local-changes="pushingLocalChanges"
+						:checking-out-pr="checkingOutPr"
+						:checkout-error="checkoutError"
+						:local-git-error="localGitError"
 						@add-label="addLabel"
 						@remove-label="removeLabel"
 						@comments-updated="onCommentsUpdated"
@@ -99,9 +120,35 @@
 						@merge-pr="openMergeConfirm"
 						@close-pr="openCloseConfirm"
 						@toggle-draft="togglePrDraft"
+						@checkout-pr="checkoutPrBranch"
+						@commit-local-changes="openLocalCommitModal"
+						@push-local-changes="pushLocalChanges"
 					/>
 					<pr-files-tab
-						v-else-if="activeTab === 'files'"
+						v-else-if="activeTab === 'local-files'"
+						:files="localFiles"
+						:files-loading="localFilesLoading"
+						:owner="owner"
+						:repo="repo"
+						:base-ref="pr.head.sha"
+						:head-ref="pr.head.sha"
+						:initial-file-index="localFileIndex"
+						:pr-title="pr.title"
+						:pr-number="routeBackedPrNumber"
+						:pr-author-login="pr.user.login"
+						:tab-size="tabSize"
+						:diff-font-size="diffFontSize"
+						:viewed-files="localViewedFiles"
+						:review-enabled="false"
+						:viewed-enabled="true"
+						:empty-message="localFilesEmptyMessage"
+						:file-content-loader="loadLocalFileContent"
+						@update:file-index="onLocalFileIndexChange"
+						@update:viewed="onLocalViewedChange"
+						@all-viewed="onAllFilesViewed"
+					/>
+					<pr-files-tab
+						v-else-if="activeTab === 'pr-files'"
 						:files="files"
 						:files-loading="filesLoading"
 						:owner="owner"
@@ -127,6 +174,7 @@
 						@edit-pending="onEditPending"
 						@comments-updated="onCommentsUpdated"
 						@thread-focus-handled="onThreadFocusHandled"
+						@all-viewed="onAllFilesViewed"
 					/>
 				</div>
 			</div>
@@ -184,6 +232,35 @@
 					@close="closeTitleEdit"
 					@save="saveTitleEdit"
 				/>
+				<pr-modal-dialog
+					:open="localCommitModalOpen"
+					title="Commit local changes"
+					title-id="local-commit-title"
+					dialog-class="pr-local-commit-modal"
+					:close-disabled="committingLocalChanges"
+					:focus-on-open="false"
+					@close="closeLocalCommitModal"
+				>
+					<label class="pr-local-commit-label u-flex u-flex-col u-gap-1 u-fs-13 u-fw-600">
+						Commit message
+						<textarea
+							v-model="localCommitMessage"
+							class="pr-local-commit-input u-fs-13"
+							rows="4"
+							:disabled="committingLocalChanges"
+							@keydown.meta.enter.prevent="confirmLocalCommit"
+							@keydown.ctrl.enter.prevent="confirmLocalCommit"
+						></textarea>
+					</label>
+					<p v-if="localCommitError" class="pr-local-commit-error u-fs-13 u-mb-0">{{ localCommitError }}</p>
+					<div class="pr-merge-confirm-actions pr-local-commit-actions u-flex u-justify-end u-gap-2-5 u-flex-wrap">
+						<button type="button" class="btn btn-secondary" :disabled="committingLocalChanges" @click="closeLocalCommitModal">Cancel</button>
+						<button type="button" class="btn pr-merge-confirm-submit" :disabled="committingLocalChanges || !localCommitMessage.trim()" @click="confirmLocalCommit">
+							<span v-if="committingLocalChanges" class="async-loader"></span>
+							<template v-else>Commit</template>
+						</button>
+					</div>
+				</pr-modal-dialog>
 			</Teleport>
 		</template>
 	</div>
@@ -195,13 +272,17 @@ import PrDetailLoadState                        from '@/components/pr/PrDetailLo
 import PrDetailTabBar                           from '@/components/pr/PrDetailTabBar.vue';
 import PrErrorModal                             from '@/components/pr/PrErrorModal.vue';
 import PrMergeConfirmModal                      from '@/components/pr/PrMergeConfirmModal.vue';
+import PrModalDialog                            from '@/components/pr/PrModalDialog.vue';
 import PrTitleEditModal                         from '@/components/pr/PrTitleEditModal.vue';
 import PrWhitespaceViewedModal                  from '@/components/pr/PrWhitespaceViewedModal.vue';
 import SettingsPopup                            from '@/components/pr/SettingsPopup.vue';
 import { clearToken, getStoredToken }           from '@/lib/api/auth';
-import type { CheckRunDetail, IssueComment, PendingComment, PRFile, RepoLabel, ReviewComment }     from '@/lib/api/githubClient';
+import type { GitWorkspaceStatus, LocalPrStatus } from '@/lib/api/gitCheckoutClient';
+import { checkoutPullRequestBranch, checkoutTargetForPr, commitLocalPullRequestChanges, fetchGitWorkspaceStatus, fetchLocalPullRequestFileContent, fetchLocalPullRequestFiles, fetchLocalPullRequestStatus, pushLocalPullRequestChanges } from '@/lib/api/gitCheckoutClient';
+import type { CheckRunDetail, IssueComment, PendingComment, PRFile, RepoLabel, ReviewComment } from '@/lib/api/githubClient';
 import GitHubClient                             from '@/lib/api/githubClient';
 import { isWhitespaceOnlyFileChange }           from '@/lib/diff/patchDiff';
+import { loadLocalViewedFiles, setLocalFileViewed } from '@/lib/localViewedFiles';
 import { loadPendingReview, savePendingReview } from '@/lib/pendingReviewStorage';
 import type { ResolvedScheme }                  from '@/lib/theme/colorScheme';
 import { getResolvedScheme, subscribeColorScheme } from '@/lib/theme/colorScheme';
@@ -211,6 +292,8 @@ import { timeAgo }                              from '@/lib/utils';
 
 import { Component, Prop, Vue, Watch } from 'vue-facing-decorator';
 
+type PrDetailTab = 'overview' | 'local-files' | 'pr-files';
+
 @Component({
 	components : {
 		PrCloseConfirmModal,
@@ -218,6 +301,7 @@ import { Component, Prop, Vue, Watch } from 'vue-facing-decorator';
 		PrDetailTabBar,
 		PrErrorModal,
 		PrMergeConfirmModal,
+		PrModalDialog,
 		SettingsPopup,
 		PrTitleEditModal,
 		PrWhitespaceViewedModal,
@@ -227,7 +311,7 @@ import { Component, Prop, Vue, Watch } from 'vue-facing-decorator';
 export default class PrDetailView extends Vue {
 
 	/** Line break matches prior `data-tooltip` &#10; for multi-line has-tooltip text. */
-	readonly whitespaceViewedBtnTooltip = 'Mark unviewed files whose patch changes only whitespace as viewed on GitHub (same as the Files tab checkbox).\nSkips files without a patch or with uneven diff blocks.';
+	readonly whitespaceViewedBtnTooltip = 'Mark unviewed files whose patch changes only whitespace as viewed on GitHub (same as the PR Files tab checkbox).\nSkips files without a patch or with uneven diff blocks.';
 
 	@Prop({ required : true }) readonly owner!: string;
 	@Prop({ required : true }) readonly repo!: string;
@@ -239,11 +323,15 @@ export default class PrDetailView extends Vue {
 	checks: CheckRunDetail[] = [];
 	repoLabels: RepoLabel[] = [];
 	files: PRFile[] = [];
+	localFiles: PRFile[] = [];
+	localViewedFiles: Record<string, string> = {};
 	loading = true;
 	checksLoading = true;
 	filesLoading = false;
+	localFilesLoading = false;
+	localFilesError = '';
 	error = '';
-	activeTab: 'overview' | 'files' = 'overview';
+	activeTab: PrDetailTab = 'overview';
 	tabSize = getDiffTabSize();
 	diffFontSize = getDiffFontSize();
 
@@ -275,7 +363,18 @@ export default class PrDetailView extends Vue {
 	closeConfirmError = '';
 	closingPr = false;
 	approvePrError = '';
-	/** When set while the Files tab is shown, selects the diff file and focuses the comment thread there. Cleared after the tab handles it. */
+	checkoutStatus: GitWorkspaceStatus | null = null;
+	localPrStatus: LocalPrStatus | null = null;
+	checkingOutPr = false;
+	committingLocalChanges = false;
+	pushingLocalChanges = false;
+	refreshingOverview = false;
+	checkoutError = '';
+	localGitError = '';
+	localCommitModalOpen = false;
+	localCommitMessage = '';
+	localCommitError = '';
+	/** When set while the PR Files tab is shown, selects the diff file and focuses the comment thread there. Cleared after the tab handles it. */
 	pendingThreadFocus: null | { path: string; line: number; side: 'LEFT' | 'RIGHT'; nonce: number } = null;
 
 	_checksTimer: ReturnType<typeof setInterval> | null = null;
@@ -285,7 +384,9 @@ export default class PrDetailView extends Vue {
 	_originalTitle = '';
 	mergePollCancelled = false;
 	_loadFilesPromise: Promise<void> | null = null;
+	_loadLocalFilesPromise: Promise<void> | null = null;
 	embeddedFileIndex = 0;
+	localFileIndex = 0;
 
 	readonly timeAgo = timeAgo;
 
@@ -319,6 +420,9 @@ export default class PrDetailView extends Vue {
 		this.mergingPr          = false;
 		this.approvePrError     = '';
 		this.mergePrError       = '';
+		this.checkoutError      = '';
+		this.localGitError      = '';
+		this.localPrStatus      = null;
 		const parts             = oldKey.split('/');
 		if (parts.length !== 3) {
 			return;
@@ -359,20 +463,23 @@ export default class PrDetailView extends Vue {
 
 	/** Header badge: open PRs show # only; draft / merged / closed add an explicit status. */
 	get prStatusBadgeText(): string {
-		if (!this.pr) {
-			return '';
-		}
 		const n = this.routeBackedPrNumber;
-		if (this.pr.draft) {
-			return `#${n} · Draft`;
+		switch (true) {
+			case !this.pr: return '';
+			case this.pr.draft: return `#${n} · Draft`;
+			case this.pr.merged: return `#${n} · Merged`;
+			case this.pr.state === 'closed': return `#${n} · Closed`;
+			default: return `#${n}`;
 		}
-		if (this.pr.merged) {
-			return `#${n} · Merged`;
+	}
+
+	get prStatusBadgeClass(): string {
+		switch (true) {
+			case this.pr?.draft: return 'pr-detail-badge-draft';
+			case this.pr?.merged: return 'pr-detail-badge-merged';
+			case this.pr?.state === 'closed': return 'pr-detail-badge-closed';
+			default: return 'pr-detail-badge-open';
 		}
-		if (this.pr.state === 'closed') {
-			return `#${n} · Closed`;
-		}
-		return `#${n}`;
 	}
 
 	/** First file index not marked VIEWED on GitHub; 0 if none or all viewed. */
@@ -418,7 +525,11 @@ export default class PrDetailView extends Vue {
 	}
 
 	get showMarkWhitespaceViewedButton(): boolean {
-		return Boolean(this.files.length && this.prNodeId && this.whitespaceOnlyUnviewedCount > 0);
+		return Boolean(this.activeTab === 'pr-files' && this.files.length && this.prNodeId && this.whitespaceOnlyUnviewedCount > 0);
+	}
+
+	get localFilesEmptyMessage(): string {
+		return this.localFilesError || 'No local changes';
 	}
 
 	/** Show merge for any non-draft PR that is not already merged (GitHub returns an error if merge is not allowed). */
@@ -458,8 +569,8 @@ export default class PrDetailView extends Vue {
 
 	mounted() {
 		this._originalTitle = document.title;
-		if (!this.embedded && this.tab === 'files') {
-			this.activeTab = 'files';
+		if (!this.embedded && (this.tab === 'pr-files' || this.tab === 'local-files')) {
+			this.activeTab = this.tab;
 		}
 		const token = getStoredToken();
 		if (token) {
@@ -549,7 +660,9 @@ export default class PrDetailView extends Vue {
 			]);
 			this.pr             = pr;
 			this.reviewDecision = decision;
-			document.title      = `#${this.routeBackedPrNumber} ${this.pr.title}`;
+			void this.refreshCheckoutStatus();
+			void this.refreshLocalPrStatus();
+			document.title = `#${this.routeBackedPrNumber} ${this.pr.title}`;
 		}
 		catch (e: any) {
 			console.error('Failed to refresh PR when tab became visible:', e);
@@ -584,8 +697,13 @@ export default class PrDetailView extends Vue {
 			this.loadChecks();
 			this.loadRepoLabels();
 			this.loadReviewComments();
-			if (this.activeTab === 'files') {
+			void this.refreshCheckoutStatus();
+			void this.refreshLocalPrStatus();
+			if (this.activeTab === 'pr-files') {
 				this.loadFiles();
+			}
+			else if (this.activeTab === 'local-files') {
+				this.loadLocalFiles();
 			}
 		}
 		catch (e: any) {
@@ -642,13 +760,61 @@ export default class PrDetailView extends Vue {
 			this.loadChecks();
 			this.loadRepoLabels();
 			this.loadReviewComments();
-			if (this.activeTab === 'files') {
+			void this.refreshCheckoutStatus();
+			void this.refreshLocalPrStatus();
+			if (this.activeTab === 'pr-files') {
 				this.loadFiles();
+			}
+			else if (this.activeTab === 'local-files') {
+				this.loadLocalFiles();
 			}
 		}
 		catch (e: any) {
 			this.error   = e.message || 'Failed to load PR';
 			this.loading = false;
+		}
+	}
+
+	async refreshOverview(): Promise<void> {
+		if (this.refreshingOverview) {
+			return;
+		}
+		this.refreshingOverview = true;
+		this.error              = '';
+		GitHubClient.clearAsyncCaches();
+		try {
+			const [ pr, decision ] = await Promise.all([
+				GitHubClient.fetchPRDetail(this.owner, this.repo, this.prNumber),
+				GitHubClient.fetchPullRequestReviewDecision(this.owner, this.repo, this.prNumber),
+			]);
+			this.pr             = pr;
+			this.reviewDecision = decision;
+			document.title      = `#${this.routeBackedPrNumber} ${this.pr.title}`;
+			const headSha       = pr.head?.sha;
+			if (headSha) {
+				const restored       = loadPendingReview(this.owner, this.repo, this.prNumber, headSha);
+				this.pendingComments = restored ?? [];
+			}
+			else {
+				this.pendingComments = [];
+			}
+			if (pr.user?.login) {
+				await GitHubClient.fetchUserFirstNames([ pr.user.login ]);
+			}
+			await Promise.all([
+				this.loadChecks(),
+				this.loadRepoLabels(),
+				this.loadReviewComments(),
+				this.refreshCheckoutStatus(),
+				this.refreshLocalPrStatus(),
+				this.loadLocalFiles(),
+			]);
+		}
+		catch (e: any) {
+			this.error = e.message || 'Failed to refresh PR';
+		}
+		finally {
+			this.refreshingOverview = false;
 		}
 	}
 
@@ -670,6 +836,53 @@ export default class PrDetailView extends Vue {
 		}
 		finally {
 			this.checksLoading = false;
+		}
+	}
+
+	async refreshCheckoutStatus(): Promise<void> {
+		try {
+			this.checkoutStatus = await fetchGitWorkspaceStatus();
+		}
+		catch {
+			this.checkoutStatus = null;
+		}
+	}
+
+	async refreshLocalPrStatus(): Promise<void> {
+		const target = checkoutTargetForPr(this.pr);
+		if (!target) {
+			this.localPrStatus = null;
+			return;
+		}
+		try {
+			this.localPrStatus = await fetchLocalPullRequestStatus(target);
+		}
+		catch {
+			this.localPrStatus = null;
+		}
+	}
+
+	async checkoutPrBranch(worktreePath?: string): Promise<void> {
+		if (!this.pr || this.checkingOutPr) {
+			return;
+		}
+		const target = checkoutTargetForPr(this.pr);
+		if (!target) {
+			this.checkoutError = 'Reload this pull request so branch details are available.';
+			return;
+		}
+		this.checkingOutPr = true;
+		this.checkoutError = '';
+		try {
+			this.checkoutStatus = await checkoutPullRequestBranch(target, worktreePath);
+			await this.refreshLocalPrStatus();
+		}
+		catch (error: any) {
+			this.checkoutError = error.message || 'Checkout failed';
+			await this.refreshCheckoutStatus();
+		}
+		finally {
+			this.checkingOutPr = false;
 		}
 	}
 
@@ -712,6 +925,58 @@ export default class PrDetailView extends Vue {
 		await this.loadFiles();
 	}
 
+	async loadLocalFiles(): Promise<void> {
+		if (this._loadLocalFilesPromise) {
+			return this._loadLocalFilesPromise;
+		}
+		const target = checkoutTargetForPr(this.pr);
+		if (!target) {
+			this.localFiles      = [];
+			this.localFilesError = 'Reload this pull request so branch details are available.';
+			return;
+		}
+		this.localFilesLoading      = true;
+		this.localFilesError        = '';
+		this._loadLocalFilesPromise = (async () => {
+			try {
+				this.localFiles       = await fetchLocalPullRequestFiles(target);
+				this.localViewedFiles = this.loadLocalViewedState(this.localFiles);
+				void this.refreshLocalPrStatus();
+			}
+			catch (error: any) {
+				this.localFiles       = [];
+				this.localViewedFiles = {};
+				this.localFilesError  = error.message || 'Could not load local changes';
+			}
+			finally {
+				this.localFilesLoading      = false;
+				this._loadLocalFilesPromise = null;
+			}
+		})();
+		return this._loadLocalFilesPromise;
+	}
+
+	async loadLocalFileContent(file: PRFile): Promise<{ base: string | null; head: string | null }> {
+		const target = checkoutTargetForPr(this.pr);
+		if (!target) {
+			throw new Error('Reload this pull request so branch details are available.');
+		}
+		return fetchLocalPullRequestFileContent(target, file);
+	}
+
+	private loadLocalViewedState(files: PRFile[]): Record<string, string> {
+		const headSha = this.pr?.head?.sha;
+		if (!headSha) {
+			return {};
+		}
+		return loadLocalViewedFiles({
+			owner    : this.owner,
+			repo     : this.repo,
+			prNumber : this.routeBackedPrNumber,
+			headSha,
+		}, files);
+	}
+
 	async loadReviewComments() {
 		this.reviewCommentsLoading = true;
 		try {
@@ -727,7 +992,7 @@ export default class PrDetailView extends Vue {
 		}
 	}
 
-	/** Apply GitHub viewed-file state for `fileList` so `files` and `viewedFiles` stay in sync for the child Files tab. */
+	/** Apply GitHub viewed-file state for `fileList` so `files` and `viewedFiles` stay in sync for the child PR Files tab. */
 	private applyViewedStateFromApi(fileList: PRFile[], result: { prNodeId: string; viewedFiles: Record<string, string> }) {
 		this.prNodeId = result.prNodeId;
 		const byPath  = result.viewedFiles;
@@ -759,21 +1024,24 @@ export default class PrDetailView extends Vue {
 		}
 	}
 
-	switchTab(tab: 'overview' | 'files') {
+	switchTab(tab: PrDetailTab) {
 		this.activeTab = tab;
 		if (!this.embedded) {
 			const base = `/pull-request/${this.owner}/${this.repo}/${this.number}/${tab}`;
 			this.$router.replace({ path : base });
 		}
-		if (tab === 'files') {
+		if (tab === 'pr-files') {
 			void this.loadFiles();
+		}
+		else if (tab === 'local-files') {
+			void this.loadLocalFiles();
 		}
 	}
 
 	async onOpenReviewInFiles(nav: { path: string; line: number; side: 'LEFT' | 'RIGHT' }) {
 		await this.ensureFilesLoaded();
 		const side = nav.side === 'LEFT' ? 'LEFT' : 'RIGHT';
-		this.switchTab('files');
+		this.switchTab('pr-files');
 		this.pendingThreadFocus = {
 			path  : nav.path,
 			line  : nav.line,
@@ -792,13 +1060,117 @@ export default class PrDetailView extends Vue {
 			return;
 		}
 		this.$router.replace({
-			path  : `/pull-request/${this.owner}/${this.repo}/${this.number}/files`,
+			path  : `/pull-request/${this.owner}/${this.repo}/${this.number}/pr-files`,
 			query : { file : String(index) },
 		});
 	}
 
+	onLocalFileIndexChange(index: number) {
+		this.localFileIndex = index;
+	}
+
+	onLocalViewedChange(payload: { filename: string; state: string }) {
+		const file    = this.localFiles.find(item => item.filename === payload.filename);
+		const headSha = this.pr?.head?.sha;
+		if (!file || !headSha) {
+			return;
+		}
+		setLocalFileViewed({
+			owner    : this.owner,
+			repo     : this.repo,
+			prNumber : this.routeBackedPrNumber,
+			headSha,
+		}, file, payload.state);
+		if (payload.state === 'VIEWED') {
+			this.localViewedFiles = { ...this.localViewedFiles, [payload.filename] : 'VIEWED' };
+		}
+		else {
+			const next = { ...this.localViewedFiles };
+			delete next[payload.filename];
+			this.localViewedFiles = next;
+		}
+	}
+
 	onViewedChange(payload: { filename: string; state: string }) {
 		this.viewedFiles = { ...this.viewedFiles, [payload.filename] : payload.state };
+	}
+
+	openLocalCommitModal() {
+		this.localCommitMessage   = '';
+		this.localCommitError     = '';
+		this.localGitError        = '';
+		this.localCommitModalOpen = true;
+	}
+
+	closeLocalCommitModal() {
+		if (this.committingLocalChanges) {
+			return;
+		}
+		this.localCommitModalOpen = false;
+		this.localCommitError     = '';
+	}
+
+	async confirmLocalCommit() {
+		if (this.committingLocalChanges) {
+			return;
+		}
+		const target = checkoutTargetForPr(this.pr);
+		if (!target) {
+			this.localCommitError = 'Reload this pull request so branch details are available.';
+			return;
+		}
+		const message = this.localCommitMessage.trim();
+		if (!message) {
+			this.localCommitError = 'Commit message is required.';
+			return;
+		}
+		this.committingLocalChanges = true;
+		this.localCommitError       = '';
+		this.localGitError          = '';
+		try {
+			this.localPrStatus        = await commitLocalPullRequestChanges(target, message);
+			this.localCommitModalOpen = false;
+			this.localFiles           = [];
+			this.localViewedFiles     = {};
+			await this.refreshCheckoutStatus();
+		}
+		catch (error: any) {
+			this.localCommitError = error.message || 'Could not commit local changes';
+			this.localGitError    = this.localCommitError;
+		}
+		finally {
+			this.committingLocalChanges = false;
+		}
+	}
+
+	async pushLocalChanges() {
+		if (this.pushingLocalChanges) {
+			return;
+		}
+		const target = checkoutTargetForPr(this.pr);
+		if (!target) {
+			this.localGitError = 'Reload this pull request so branch details are available.';
+			return;
+		}
+		this.pushingLocalChanges = true;
+		this.localGitError       = '';
+		try {
+			this.localPrStatus = await pushLocalPullRequestChanges(target);
+			await Promise.all([
+				this.refreshCheckoutStatus(),
+				this.loadAll(),
+			]);
+		}
+		catch (error: any) {
+			this.localGitError = error.message || 'Could not push local changes';
+		}
+		finally {
+			this.pushingLocalChanges = false;
+		}
+	}
+
+	onAllFilesViewed() {
+		this.switchTab('overview');
 	}
 
 	startChecksPolling() {
@@ -1083,12 +1455,15 @@ export default class PrDetailView extends Vue {
 		if (!this.pr || !this.canToggleDraft || this.togglingDraft) {
 			return;
 		}
+		const pullRequestId = this.prNodeId || this.pr.node_id;
+		if (!pullRequestId) {
+			console.error('Missing pull request node id for draft toggle');
+			return;
+		}
 		this.togglingDraft = true;
 		try {
-			const updated = await GitHubClient.updatePullRequest(this.owner, this.repo, this.prNumber, {
-				draft : !this.pr.draft,
-			});
-			this.pr.draft = Boolean(updated.draft);
+			const updated = await GitHubClient.setPullRequestDraft(pullRequestId, !this.pr.draft);
+			this.pr.draft = updated.draft;
 		}
 		catch (e: any) {
 			console.error('Failed to update draft state:', e);
@@ -1215,6 +1590,39 @@ html[data-color-scheme="light"] .pr-detail-header {
 	border-color: var(--text-tertiary);
 }
 
+.pr-detail-header-refresh-btn {
+	min-height: 30px;
+	padding: 5px 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--bg-primary);
+	color: var(--text-secondary);
+	font: inherit;
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 1;
+	transition:
+		color var(--transition),
+		border-color var(--transition),
+		background var(--transition);
+}
+
+.pr-detail-header-refresh-btn:hover:not(:disabled) {
+	color: var(--text-primary);
+	border-color: var(--text-tertiary);
+	background: var(--bg-tertiary);
+}
+
+.pr-detail-header-refresh-btn:disabled {
+	color: var(--text-tertiary);
+	cursor: default;
+	opacity: 0.72;
+}
+
+.pr-detail-header-refresh-btn.spinning svg {
+	animation: spin 0.9s linear infinite;
+}
+
 .pr-detail-badge {
 	font-size: 12px;
 	font-weight: 600;
@@ -1256,12 +1664,17 @@ html[data-color-scheme="light"] .pr-detail-header {
 }
 
 .pr-detail-tab {
-	padding: 4px 12px;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 28px;
+	padding: 4px 10px;
 	border: none;
 	background: transparent;
-	color: var(--text-tertiary);
+	color: var(--text-secondary);
 	font-size: 12px;
-	font-weight: 500;
+	font-weight: 600;
+	line-height: 1;
 	border-radius: 4px;
 	cursor: pointer;
 	transition: all var(--transition);
@@ -1269,13 +1682,32 @@ html[data-color-scheme="light"] .pr-detail-header {
 	white-space: nowrap;
 
 	&:hover {
-		color: var(--text-secondary);
+		color: var(--text-primary);
+		background: var(--bg-tertiary);
 	}
 
 	&.active {
 		color: var(--text-primary);
 		background: var(--bg-tertiary);
 	}
+}
+
+.pr-detail-tab-count {
+	min-width: 16px;
+	padding: 1px 4px;
+	border-radius: 999px;
+	background: var(--muted-bg);
+	color: var(--text-secondary);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	font-weight: 600;
+	line-height: 1.2;
+	text-align: center;
+}
+
+.pr-detail-tab.active .pr-detail-tab-count {
+	background: var(--bg-primary);
+	color: var(--text-primary);
 }
 
 .pr-detail-review-bar-track {
@@ -1382,6 +1814,37 @@ html[data-color-scheme="light"] .pr-detail-header {
 
 .pr-detail-control-wrap.has-tooltip:hover::after {
 	opacity: 1;
+}
+
+.pr-local-commit-modal {
+	width: min(440px, calc(100vw - 32px));
+}
+
+.pr-local-commit-input {
+	width: 100%;
+	min-height: 96px;
+	padding: 8px 10px;
+	resize: vertical;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--bg-primary);
+	color: var(--text-primary);
+	font-family: inherit;
+	line-height: 1.45;
+}
+
+.pr-local-commit-input:focus {
+	outline: none;
+	border-color: var(--focus-ring);
+	box-shadow: 0 0 0 1px var(--focus-ring);
+}
+
+.pr-local-commit-error {
+	color: var(--accent-red);
+}
+
+.pr-local-commit-actions {
+	margin-top: 18px;
 }
 
 .pr-detail-tab-size {

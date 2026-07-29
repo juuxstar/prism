@@ -5,9 +5,6 @@ APP_NAME="${APP_NAME:-prism}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-linux/amd64}"
 LOCAL_IMAGE="${APP_NAME}:${IMAGE_TAG}"
-CONTAINER_NAME="${CONTAINER_NAME:-$APP_NAME}"
-HOST_PORT="${HOST_PORT:-3002}"
-CONTAINER_PORT="${CONTAINER_PORT:-3002}"
 REMOTE_APP_DIR="${REMOTE_APP_DIR:-/home/ubuntu/frontlobby/prism}"
 REMOTE_IMAGE_TAR="${REMOTE_IMAGE_TAR:-${REMOTE_APP_DIR}/${APP_NAME}-${IMAGE_TAG}.tar.gz}"
 REMOTE_USE_SUDO_SU="${REMOTE_USE_SUDO_SU:-0}"
@@ -47,11 +44,11 @@ ssh $SSH_REMOTE_OPTS "$SSH_TARGET" "mkdir -p $(shell_quote "$REMOTE_APP_DIR")"
 echo "Uploading image archive to $SSH_TARGET:$REMOTE_IMAGE_TAR..."
 scp "$LOCAL_IMAGE_TAR" "$SSH_TARGET:$REMOTE_IMAGE_TAR"
 
-echo "Loading and restarting $CONTAINER_NAME on $SSH_TARGET..."
+echo "Uploading docker-compose.yml to $SSH_TARGET:$REMOTE_APP_DIR/docker-compose.yml..."
+scp docker-compose.yml "$SSH_TARGET:$REMOTE_APP_DIR/docker-compose.yml"
+
+echo "Loading and restarting $APP_NAME on $SSH_TARGET..."
 REMOTE_ENV="LOCAL_IMAGE=$(shell_quote "$LOCAL_IMAGE")"
-REMOTE_ENV="$REMOTE_ENV CONTAINER_NAME=$(shell_quote "$CONTAINER_NAME")"
-REMOTE_ENV="$REMOTE_ENV HOST_PORT=$(shell_quote "$HOST_PORT")"
-REMOTE_ENV="$REMOTE_ENV CONTAINER_PORT=$(shell_quote "$CONTAINER_PORT")"
 REMOTE_ENV="$REMOTE_ENV REMOTE_APP_DIR=$(shell_quote "$REMOTE_APP_DIR")"
 REMOTE_ENV="$REMOTE_ENV REMOTE_IMAGE_TAR=$(shell_quote "$REMOTE_IMAGE_TAR")"
 REMOTE_ENV="$REMOTE_ENV GITHUB_CLIENT_ID=$(shell_quote "$GITHUB_CLIENT_ID")"
@@ -72,6 +69,21 @@ docker_cmd() {
 	fi
 }
 
+docker_compose_cmd() {
+	if docker_cmd compose version >/dev/null 2>&1; then
+		docker_cmd compose "$@"
+	elif command -v docker-compose >/dev/null 2>&1; then
+		if [ "${REMOTE_DOCKER_USE_SUDO:-0}" = "1" ]; then
+			sudo -E docker-compose "$@"
+		else
+			docker-compose "$@"
+		fi
+	else
+		echo "Docker Compose is required on the remote server." >&2
+		exit 1
+	fi
+}
+
 cd "$REMOTE_APP_DIR"
 if ! docker ps >/dev/null 2>&1; then
 	if sudo -n -E docker ps >/dev/null 2>&1; then
@@ -83,14 +95,12 @@ if ! docker ps >/dev/null 2>&1; then
 fi
 
 docker_cmd load < "$REMOTE_IMAGE_TAR"
-docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-docker_cmd run -d \
-	--name "$CONTAINER_NAME" \
-	--restart unless-stopped \
-	-p "$HOST_PORT:$CONTAINER_PORT" \
-	-e "GITHUB_CLIENT_ID=$GITHUB_CLIENT_ID" \
-	"$LOCAL_IMAGE"
+docker_cmd network inspect web-proxy >/dev/null 2>&1 || {
+	echo "Docker network web-proxy does not exist. Start the shared proxy first." >&2
+	exit 1
+}
+PRISM_IMAGE="$LOCAL_IMAGE" GITHUB_CLIENT_ID="$GITHUB_CLIENT_ID" docker_compose_cmd up -d --no-build
 rm -f "$REMOTE_IMAGE_TAR"
 REMOTE_SCRIPT
 
-echo "Deployed $LOCAL_IMAGE to $SSH_TARGET on port $HOST_PORT."
+echo "Deployed $LOCAL_IMAGE to $SSH_TARGET via docker compose."

@@ -1,6 +1,7 @@
 <template>
 	<nav class="pr-files-nav-bar u-flex u-items-center u-gap-2 u-fs-13 u-flex-shrink-0 u-sticky u-top-0 u-z-5">
 		<button
+			v-if="showViewedControls"
 			class="pr-files-nav-btn pr-files-nav-btn-skip has-tooltip u-flex-shrink-0"
 			:disabled="prevUnviewedIndex === -1"
 			@click="currentIndex = prevUnviewedIndex"
@@ -10,6 +11,7 @@
 		</button>
 		<button class="pr-files-nav-btn has-tooltip u-flex-shrink-0" :disabled="currentIndex <= 0" @click="currentIndex--" data-tooltip="Go to previous file">&lt;</button>
 		<button
+			v-if="showViewedControls"
 			class="pr-files-nav-viewed-btn has-tooltip u-flex-shrink-0"
 			:class="{ checked : isCurrentFileViewed }"
 			@click="emit('toggleViewed')"
@@ -38,7 +40,7 @@
 						dropdownOpen = false;
 					"
 				>
-					<span class="pr-files-dropdown-viewed u-flex-shrink-0" :class="{ checked : viewedFiles[file.filename] === 'VIEWED' }">✓</span>
+					<span v-if="showViewedControls" class="pr-files-dropdown-viewed u-flex-shrink-0" :class="{ checked : viewedFiles[file.filename] === 'VIEWED' }">✓</span>
 					<span class="file-status-icon u-flex-shrink-0" :class="'file-status-' + file.status">{{ fileStatusSymbol(file.status) }}</span>
 					<span class="pr-files-dropdown-item-name u-truncate u-flex-1 u-min-w-0">{{ file.previous_filename ? file.previous_filename + " → " : "" }}{{ file.filename }}</span>
 					<span class="pr-files-dropdown-item-stats u-flex u-gap-1-5 u-flex-shrink-0 u-ml-2">
@@ -49,6 +51,7 @@
 			</ul>
 		</div>
 		<button
+			v-if="showViewedControls"
 			class="pr-files-nav-viewed-btn has-tooltip u-flex-shrink-0"
 			:class="{ checked : isCurrentFileViewed }"
 			@click="emit('toggleViewed')"
@@ -58,6 +61,7 @@
 		</button>
 		<button class="pr-files-nav-btn has-tooltip u-flex-shrink-0" :disabled="currentIndex >= files.length - 1" @click="currentIndex++" data-tooltip="Go to next file">&gt;</button>
 		<button
+			v-if="showViewedControls"
 			class="pr-files-nav-btn pr-files-nav-btn-skip has-tooltip u-flex-shrink-0"
 			:disabled="nextUnviewedIndex === -1"
 			@click="currentIndex = nextUnviewedIndex"
@@ -83,6 +87,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 const props = defineProps<{
 	files: PRFile[];
 	viewedFiles: Record<string, string>;
+	showViewedControls?: boolean;
 }>();
 
 const currentIndex = defineModel<number>('currentIndex', { required : true });
@@ -129,12 +134,18 @@ const currentFile = computed(() => props.files[currentIndex.value] ?? props.file
 
 const isCurrentFileViewed = computed(() => props.viewedFiles[currentFile.value?.filename] === 'VIEWED');
 
+const showViewedControls = computed(() => props.showViewedControls !== false);
+
 function fileStatusSymbol(status: string): string {
 	const map: Record<string, string> = { added : '+', removed : '−', modified : '●', renamed : '→', copied : '⊕' };
 	return map[status] || status[0]?.toUpperCase() || '?';
 }
 
 function findUnviewedFile(direction: 1 | -1): number {
+	if (!showViewedControls.value) {
+		const next = currentIndex.value + direction;
+		return next >= 0 && next < props.files.length ? next : -1;
+	}
 	const len  = props.files.length;
 	const idx0 = currentIndex.value;
 	for (let offset = 1; offset < len; offset++) {
@@ -202,7 +213,7 @@ const _keyHandler = (e: KeyboardEvent) => {
 			currentIndex.value = idx;
 		}
 	}
-	else if (e.key === ' ') {
+	else if (showViewedControls.value && e.key === ' ') {
 		const tag = (document.activeElement?.tagName || '').toLowerCase();
 		if (tag === 'input' || tag === 'select' || tag === 'textarea' || tag === 'button') {
 			return;

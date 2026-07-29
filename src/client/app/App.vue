@@ -32,6 +32,7 @@
 		:async-version="dataVersion"
 		:branches="branches"
 		:user="user"
+		:checkout-status="checkoutStatus"
 		@create-pr="handleCreatePR"
 		@api-error="handleBoardApiError"
 		@show-error="showError"
@@ -57,6 +58,8 @@
 
 <script lang="ts">
 import { cancelPolling, clearToken, getStoredToken, pollForToken, startDeviceFlow, storeToken } from '@/lib/api/auth';
+import type { GitWorkspaceStatus }       from '@/lib/api/gitCheckoutClient';
+import { fetchGitWorkspaceStatus }       from '@/lib/api/gitCheckoutClient';
 import type { AccessibleRepo, ApiError } from '@/lib/api/githubClient';
 import GitHubClient                      from '@/lib/api/githubClient';
 import { fetchGithubDashboardStatus, type GithubStatusBannerLevel }                             from '@/lib/githubStatus';
@@ -95,13 +98,13 @@ export default class App extends Vue {
 	loginDisabled = false;
 	dataVersion = 0;
 	selectedOverlayPr: OverlayPr | null = null;
+	checkoutStatus: GitWorkspaceStatus | null = null;
 
 	private _rateLimitTimer: ReturnType<typeof setTimeout> | null = null;
 	private _checksTimer: ReturnType<typeof setInterval> | null = null;
 	private _githubStatusTimer: ReturnType<typeof setInterval> | null = null;
 	private _githubStatusDismissedFingerprint: string | null   = null;
 	private _lastGithubStatusFingerprint: string              = '';
-
 	get repos(): string[] {
 		const set = new Set<string>();
 		this.accessibleRepos.forEach(repo => {
@@ -329,6 +332,7 @@ export default class App extends Vue {
 			GitHubClient.clearAsyncCaches();
 			await this.fetchPRs(this.currentRepo);
 			this.dataVersion++;
+			void this.refreshCheckoutStatus();
 			await this.fetchAndRenderBranches();
 			this.fetchAsyncData();
 			this.refreshGithubStatus();
@@ -385,6 +389,7 @@ export default class App extends Vue {
 		GitHubClient.fetchPRStats(prs)
 			.then(() => {
 				this.dataVersion++;
+				this.refreshCheckoutStatus();
 			})
 			.catch(e => this.handleAsyncError(e));
 		GitHubClient.fetchChecks(prs)
@@ -449,6 +454,18 @@ export default class App extends Vue {
 		if (this._checksTimer) {
 			clearInterval(this._checksTimer);
 			this._checksTimer = null;
+		}
+	}
+
+	async refreshCheckoutStatus() {
+		try {
+			this.checkoutStatus = await fetchGitWorkspaceStatus();
+		}
+		catch {
+			this.checkoutStatus = null;
+		}
+		finally {
+			this.dataVersion++;
 		}
 	}
 
@@ -536,6 +553,7 @@ export default class App extends Vue {
 			this.accessibleRepos = await GitHubClient.fetchAccessibleRepos();
 			await this.fetchPRs(this.currentRepo || undefined);
 			this.showScreen('pr');
+			void this.refreshCheckoutStatus();
 			this.fetchAsyncData();
 			this.fetchAndRenderBranches();
 			this.refreshGithubStatus();
