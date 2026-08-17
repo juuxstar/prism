@@ -34,9 +34,10 @@
 					<div class="pr-detail-header-center u-flex u-items-center u-justify-center u-flex-1">
 						<pr-detail-tab-bar
 							:active-tab="activeTab"
+							:show-local-files-tab="hasLocalCheckout"
 							:local-files-count="localFiles.length"
 							:changed-files-count="pr.changed_files"
-							:files-length="files.length"
+							:review-total="reviewTotal"
 							:review-pct="reviewPct"
 							@switch-tab="switchTab"
 						/>
@@ -278,7 +279,7 @@ import PrWhitespaceViewedModal                  from '@/components/pr/PrWhitespa
 import SettingsPopup                            from '@/components/pr/SettingsPopup.vue';
 import { clearToken, getStoredToken }           from '@/lib/api/auth';
 import type { GitWorkspaceStatus, LocalPrStatus } from '@/lib/api/gitCheckoutClient';
-import { checkoutPullRequestBranch, checkoutTargetForPr, commitLocalPullRequestChanges, fetchGitWorkspaceStatus, fetchLocalPullRequestFileContent, fetchLocalPullRequestFiles, fetchLocalPullRequestStatus, pushLocalPullRequestChanges } from '@/lib/api/gitCheckoutClient';
+import { checkoutPullRequestBranch, checkoutStateForPr, checkoutTargetForPr, commitLocalPullRequestChanges, fetchGitWorkspaceStatus, fetchLocalPullRequestFileContent, fetchLocalPullRequestFiles, fetchLocalPullRequestStatus, pushLocalPullRequestChanges } from '@/lib/api/gitCheckoutClient';
 import type { CheckRunDetail, IssueComment, PendingComment, PRFile, RepoLabel, ReviewComment } from '@/lib/api/githubClient';
 import GitHubClient                             from '@/lib/api/githubClient';
 import { isWhitespaceOnlyFileChange }           from '@/lib/diff/patchDiff';
@@ -385,6 +386,7 @@ export default class PrDetailView extends Vue {
 	mergePollCancelled = false;
 	_loadFilesPromise: Promise<void> | null = null;
 	_loadLocalFilesPromise: Promise<void> | null = null;
+	_loadViewedStatePromise: Promise<void> | null = null;
 	embeddedFileIndex = 0;
 	localFileIndex = 0;
 
@@ -508,12 +510,28 @@ export default class PrDetailView extends Vue {
 		return Object.values(this.viewedFiles).filter(s => s === 'VIEWED').length;
 	}
 
+	/**
+	 * Files the review progress is measured against; `changed_files` stands in on Overview, where the file list is not
+	 * fetched. Stays 0 until the viewed state has loaded (`prNodeId` set) so the bar does not flash 0%.
+	 */
+	get reviewTotal(): number {
+		if (this.files.length) {
+			return this.files.length;
+		}
+		return this.prNodeId ? this.pr?.changed_files || 0 : 0;
+	}
+
 	get reviewPct(): number {
-		const total = this.files.length;
+		const total = this.reviewTotal;
 		if (!total) {
 			return 0;
 		}
-		return Math.round((this.reviewedCount / total) * 100);
+		return Math.min(100, Math.round((this.reviewedCount / total) * 100));
+	}
+
+	/** Without a local checkout of the PR branch there can be no local file changes, so the Local Files tab is hidden. */
+	get hasLocalCheckout(): boolean {
+		return Boolean(checkoutStateForPr(this.pr, this.checkoutStatus));
 	}
 
 	get whitespaceOnlyUnviewedFiles(): PRFile[] {
@@ -768,6 +786,9 @@ export default class PrDetailView extends Vue {
 			else if (this.activeTab === 'local-files') {
 				this.loadLocalFiles();
 			}
+			else {
+				void this.ensureViewedStateLoaded();
+			}
 		}
 		catch (e: any) {
 			this.error   = e.message || 'Failed to load PR';
@@ -805,6 +826,7 @@ export default class PrDetailView extends Vue {
 				this.loadChecks(),
 				this.loadRepoLabels(),
 				this.loadReviewComments(),
+				this.loadViewedState(),
 				this.refreshCheckoutStatus(),
 				this.refreshLocalPrStatus(),
 				this.loadLocalFiles(),
@@ -845,6 +867,10 @@ export default class PrDetailView extends Vue {
 		}
 		catch {
 			this.checkoutStatus = null;
+		}
+		// The Local Files tab is gone once the checkout is, so do not leave it showing.
+		if (!this.hasLocalCheckout && this.activeTab === 'local-files') {
+			this.switchTab('overview');
 		}
 	}
 
@@ -1024,6 +1050,25 @@ export default class PrDetailView extends Vue {
 		}
 	}
 
+	/** Viewed state on its own, so the review progress shows on Overview without fetching the whole PR file list. */
+	async ensureViewedStateLoaded(): Promise<void> {
+		if (this.files.length || this.prNodeId) {
+			return;
+		}
+		if (this._loadViewedStatePromise) {
+			return this._loadViewedStatePromise;
+		}
+		this._loadViewedStatePromise = (async () => {
+			try {
+				await this.loadViewedState();
+			}
+			finally {
+				this._loadViewedStatePromise = null;
+			}
+		})();
+		return this._loadViewedStatePromise;
+	}
+
 	switchTab(tab: PrDetailTab) {
 		this.activeTab = tab;
 		if (!this.embedded) {
@@ -1035,6 +1080,9 @@ export default class PrDetailView extends Vue {
 		}
 		else if (tab === 'local-files') {
 			void this.loadLocalFiles();
+		}
+		else {
+			void this.ensureViewedStateLoaded();
 		}
 	}
 

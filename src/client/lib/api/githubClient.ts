@@ -561,26 +561,31 @@ class GitHubAPI {
 		}
 	}
 
-	/** Squash-merge the PR (same as GitHub’s “Squash and merge”). */
-	async mergePullRequestSquash(owner: string, repo: string, number: number): Promise<{ sha: string; merged: boolean; message: string }> {
-		const response = await fetch(`${this.apiBase}/repos/${owner}/${repo}/pulls/${number}/merge`, {
+	/**
+	 * Request a squash merge through GitHub's asynchronous endpoint.
+	 *
+	 * This endpoint is required for stacked pull requests and also supports ordinary
+	 * pull requests. A 409 means GitHub already has a compatible merge request in
+	 * progress, so the existing PR-status polling can safely continue.
+	 */
+	async mergePullRequestSquash(owner: string, repo: string, number: number): Promise<void> {
+		const response = await fetch(`${this.apiBase}/repos/${owner}/${repo}/pulls/${number}/merge-async`, {
 			method  : 'PUT',
 			headers : {
 				'Authorization' : this.getAuthHeader(),
-				'Accept'        : 'application/vnd.github.v3+json',
+				'Accept'        : 'application/vnd.github+json',
 				'Content-Type'  : 'application/json',
 			},
-			body : JSON.stringify({ merge_method : 'squash' }),
+			body : JSON.stringify({ merge_method : 'squash', merge_action : 'default' }),
 		});
 		const body = await response.json().catch(() => ({}) as any);
-		if (!response.ok) {
+		if (!response.ok && response.status !== 409) {
 			if (response.status === 401) {
 				this.clear();
 				throw apiError('Session expired. Please sign in again.', { status : 401 });
 			}
 			throw apiError(formatGithubRestErrorMessage(response.status, body), { status : response.status });
 		}
-		return body;
 	}
 
 	/** PATCH pull request (title, state, etc.). Returns updated PR JSON. Draft changes use `setPullRequestDraft`. */
