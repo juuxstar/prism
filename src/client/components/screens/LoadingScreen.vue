@@ -78,12 +78,7 @@ const SkeletonPrList = {
 };
 
 /** Board-shaped skeleton shown while PR data is being fetched. */
-@Component({
-	components : {
-		SkeletonColumnTitle,
-		SkeletonPrList,
-	},
-})
+@Component({ components : { SkeletonColumnTitle, SkeletonPrList } })
 export default class LoadingScreen extends Vue {}
 </script>
 

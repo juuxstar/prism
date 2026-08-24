@@ -108,12 +108,12 @@ export default class CommentPopover extends Vue {
 
 	readonly timeAgo = timeAgo;
 
-	newBody = '';
-	newType: CommentType = 'suggestion';
-	editBody = '';
-	editType: CommentType = 'suggestion';
-	replyBody = '';
-	replySubmitting = false;
+	newBody                   = '';
+	newType: CommentType      = 'suggestion';
+	editBody                  = '';
+	editType: CommentType     = 'suggestion';
+	replyBody                 = '';
+	replySubmitting           = false;
 	applyingId: string | null = null;
 
 	readonly commentTypes = [
@@ -129,12 +129,7 @@ export default class CommentPopover extends Vue {
 		const top    = this.anchorRect.bottom + 4;
 		const left   = Math.max(8, this.anchorRect.left - 100);
 		const maxTop = window.innerHeight - 350;
-		return {
-			position : 'fixed',
-			top      : `${Math.min(top, maxTop)}px`,
-			left     : `${left}px`,
-			zIndex   : '200',
-		};
+		return { position : 'fixed', top : `${Math.min(top, maxTop)}px`, left : `${left}px`, zIndex : '200' };
 	}
 
 	@Watch('pendingComment', { immediate : true })
@@ -173,10 +168,7 @@ export default class CommentPopover extends Vue {
 		if (type === 'change-required') {
 			return '\u{26A0}\u{FE0F} Change Required';
 		}
-		if (type === 'question') {
-			return '\u{2753} Question';
-		}
-		return '\u{1F4A1} Suggestion';
+		return type === 'question' ? '\u{2753} Question' : '\u{1F4A1} Suggestion';
 	}
 
 	parseBody(body: string) {
@@ -209,11 +201,7 @@ export default class CommentPopover extends Vue {
 		if (!this.editBody.trim() || !this.pendingComment) {
 			return;
 		}
-		const updated: PendingComment = {
-			...this.pendingComment,
-			body        : this.editBody.trim(),
-			commentType : this.editType,
-		};
+		const updated: PendingComment = { ...this.pendingComment, body : this.editBody.trim(), commentType : this.editType };
 		this.$emit('edit-pending', updated);
 		this.$emit('close');
 	}

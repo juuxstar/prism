@@ -173,12 +173,7 @@ export function computeCommonBlocks(patch: string | undefined, baseLineCount: nu
 	}
 
 	if (leftPos <= baseLineCount && rightPos <= headLineCount) {
-		blocks.push({
-			leftStart  : leftPos,
-			leftEnd    : baseLineCount,
-			rightStart : rightPos,
-			rightEnd   : headLineCount,
-		});
+		blocks.push({ leftStart : leftPos, leftEnd : baseLineCount, rightStart : rightPos, rightEnd : headLineCount });
 	}
 
 	return blocks;

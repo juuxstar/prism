@@ -30,10 +30,7 @@ export function getAppearance(): Appearance {
 }
 
 function parseStored(raw: string | null): Appearance {
-	if (raw && (VALID as string[]).includes(raw)) {
-		return raw as Appearance;
-	}
-	return 'system';
+	return raw && (VALID as string[]).includes(raw) ? raw as Appearance : 'system';
 }
 
 export function applyResolvedScheme(): void {

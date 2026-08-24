@@ -18,10 +18,7 @@ export class AuthApi extends DecoratedRouter {
 
 	@Post('/device-code')
 	async createDeviceCode(_req: Request, res: Response) {
-		res.json(await fetchGithubAuth(DEVICE_CODE_URL, {
-			client_id : CLIENT_ID,
-			scope     : GITHUB_SCOPES,
-		}));
+		res.json(await fetchGithubAuth(DEVICE_CODE_URL, { client_id : CLIENT_ID, scope : GITHUB_SCOPES }));
 	}
 
 	@Post('/poll-token')

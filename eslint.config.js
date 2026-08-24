@@ -1,4 +1,4 @@
-import lcb from "@frontlobby/eslint-config-lcb";
+import { config as lcb } from "@frontlobby/eslint-config-lcb";
 import pluginVue from "eslint-plugin-vue";
 import tseslint from "typescript-eslint";
 import globals from "globals";
@@ -33,11 +33,13 @@ export default [
 		},
 	},
 	{
+		// LCB v9 enables projectService globally; src/server/tsconfig.json is auto-discovered from it,
+		// and setting `project` alongside it is a parse error.
 		files: ["src/server/**/*.ts"],
 		languageOptions: {
 			parser: tseslint.parser,
 			parserOptions: {
-				project: ["./src/server/tsconfig.json"],
+				projectService: true,
 				tsconfigRootDir: import.meta.dirname,
 			},
 			globals: { ...globals.node },

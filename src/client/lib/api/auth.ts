@@ -23,10 +23,7 @@ export function clearToken(): void {
 }
 
 export async function startDeviceFlow(): Promise<DeviceCodeResponse> {
-	const res = await fetch('/api/auth/device-code', {
-		method  : 'POST',
-		headers : { 'Content-Type' : 'application/json' },
-	});
+	const res  = await fetch('/api/auth/device-code', { method : 'POST', headers : { 'Content-Type' : 'application/json' } });
 	const data = await res.json();
 	if (data.error) {
 		throw new Error(data.error_description || data.error);

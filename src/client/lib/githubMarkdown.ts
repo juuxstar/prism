@@ -1,10 +1,7 @@
 import DOMPurify  from 'dompurify';
 import { marked } from 'marked';
 
-marked.setOptions({
-	gfm    : true,
-	breaks : false,
-});
+marked.setOptions({ gfm : true, breaks : false });
 
 let linkHookInstalled = false;
 

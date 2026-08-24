@@ -214,7 +214,10 @@ export interface PrFileContent {
 }
 export type PrFileContentLoader = (file: PRFile) => Promise<PrFileContent>;
 
-@Component({ components : { DiffMinimap, PrDiffTable, PrFilesNavBar, PrMediaViewer }, emits : [ 'update:fileIndex', 'update:viewed', 'all-viewed', 'add-pending', 'remove-pending', 'edit-pending', 'comments-updated', 'thread-focus-handled' ] })
+@Component({
+	components : { DiffMinimap, PrDiffTable, PrFilesNavBar, PrMediaViewer },
+	emits      : [ 'update:fileIndex', 'update:viewed', 'all-viewed', 'add-pending', 'remove-pending', 'edit-pending', 'comments-updated', 'thread-focus-handled' ],
+})
 export default class PrFilesTab extends Vue {
 
 	@Prop({ required : true }) readonly files!: PRFile[];
@@ -241,21 +244,21 @@ export default class PrFilesTab extends Vue {
 	/** When present, selects the file and scrolls to the line — used from Overview navigation. */
 	@Prop({ default : null }) readonly threadFocusRequest!: ReviewThreadFocusRequest | null;
 
-	currentIndex = 0;
-	baseContent: string | null = null;
-	headContent: string | null = null;
+	currentIndex                       = 0;
+	baseContent: string | null         = null;
+	headContent: string | null         = null;
 	contentEncoding: 'text' | 'base64' = 'text';
-	contentLoading = false;
-	leftScrollTop = 0;
-	rightScrollTop = 0;
-	viewportHeight = 0;
-	lineHeight = 16.8;
-	virtualScrollTop = 0;
+	contentLoading                     = false;
+	leftScrollTop                      = 0;
+	rightScrollTop                     = 0;
+	viewportHeight                     = 0;
+	lineHeight                         = 16.8;
+	virtualScrollTop                   = 0;
 
 	activeComment: { path: string; line: number; side: 'LEFT' | 'RIGHT'; rect: DOMRect; lineContent: string } | null = null;
 
 	private _contentCache = new Map<string, PrFileContent>();
-	private _loadId = 0;
+	private _loadId       = 0;
 	private _resizeHandler = () => {
 		this.measureViewportHeight();
 		this.applyVirtualScroll();
@@ -272,30 +275,21 @@ export default class PrFilesTab extends Vue {
 		if (idx % 5 === 0) {
 			return 'is-added';
 		}
-		if (idx % 7 === 0) {
-			return 'is-removed';
-		}
-		return '';
+		return idx % 7 === 0 ? 'is-removed' : '';
 	}
 
 	skeletonCodeClass(idx: number): string {
 		if (idx % 6 === 0) {
 			return 'short';
 		}
-		if (idx % 4 === 0) {
-			return 'mid';
-		}
-		return '';
+		return idx % 4 === 0 ? 'mid' : '';
 	}
 
 	skeletonMinimapClass(idx: number): string {
 		if (idx % 5 === 0) {
 			return 'is-added';
 		}
-		if (idx % 7 === 0) {
-			return 'is-removed';
-		}
-		return '';
+		return idx % 7 === 0 ? 'is-removed' : '';
 	}
 
 	/** Next file index after `idx0` (wrapping) that is not VIEWED, or -1 if none. */
@@ -384,10 +378,7 @@ export default class PrFilesTab extends Vue {
 
 	get isMediaFile(): boolean {
 		const file = this.currentFile;
-		if (!file) {
-			return false;
-		}
-		return isRenderableMediaPaths(file.filename, file.previous_filename);
+		return !file ? false : isRenderableMediaPaths(file.filename, file.previous_filename);
 	}
 
 	get hasMediaContent(): boolean {
@@ -401,10 +392,7 @@ export default class PrFilesTab extends Vue {
 		if (file.status === 'added') {
 			return this.headContent !== null;
 		}
-		if (file.status === 'removed') {
-			return this.baseContent !== null;
-		}
-		return this.baseContent !== null || this.headContent !== null;
+		return file.status === 'removed' ? this.baseContent !== null : this.baseContent !== null || this.headContent !== null;
 	}
 
 	get baseMediaMime(): string | null {
@@ -418,31 +406,19 @@ export default class PrFilesTab extends Vue {
 	}
 
 	get baseMediaUrl(): string | null {
-		if (!this.baseContent || !this.baseMediaMime) {
-			return null;
-		}
-		return base64ToDataUrl(this.baseContent, this.baseMediaMime);
+		return !this.baseContent || !this.baseMediaMime ? null : base64ToDataUrl(this.baseContent, this.baseMediaMime);
 	}
 
 	get headMediaUrl(): string | null {
-		if (!this.headContent || !this.headMediaMime) {
-			return null;
-		}
-		return base64ToDataUrl(this.headContent, this.headMediaMime);
+		return !this.headContent || !this.headMediaMime ? null : base64ToDataUrl(this.headContent, this.headMediaMime);
 	}
 
 	get singleMediaUrl(): string | null {
-		if (this.currentFile?.status === 'removed') {
-			return this.baseMediaUrl;
-		}
-		return this.headMediaUrl;
+		return this.currentFile?.status === 'removed' ? this.baseMediaUrl : this.headMediaUrl;
 	}
 
 	get singleMediaMime(): string | null {
-		if (this.currentFile?.status === 'removed') {
-			return this.baseMediaMime;
-		}
-		return this.headMediaMime;
+		return this.currentFile?.status === 'removed' ? this.baseMediaMime : this.headMediaMime;
 	}
 
 	get hasFullContent(): boolean {
@@ -456,18 +432,12 @@ export default class PrFilesTab extends Vue {
 		if (file.status === 'added') {
 			return this.headContent !== null;
 		}
-		if (file.status === 'removed') {
-			return this.baseContent !== null;
-		}
-		return this.baseContent !== null && this.headContent !== null;
+		return file.status === 'removed' ? this.baseContent !== null : this.baseContent !== null && this.headContent !== null;
 	}
 
 	get splitLines(): { left: DiffLine[]; right: DiffLine[] } {
 		const file = this.currentFile;
-		if (!file) {
-			return { left : [], right : [] };
-		}
-		return buildSplitLinesForFile(file, this.baseContent, this.headContent);
+		return !file ? { left : [], right : [] } : buildSplitLinesForFile(file, this.baseContent, this.headContent);
 	}
 
 	get leftLines(): DiffLine[] {
@@ -508,16 +478,10 @@ export default class PrFilesTab extends Vue {
 			return [];
 		}
 		if (this.hasFullContent) {
-			if (file.status === 'added') {
-				return [];
-			}
-			return this.leftLines;
+			return file.status === 'added' ? [] : this.leftLines;
 		}
 		if (file.patch) {
-			if (file.status === 'added') {
-				return [];
-			}
-			return this.parsedPatch.left;
+			return file.status === 'added' ? [] : this.parsedPatch.left;
 		}
 		return [];
 	}
@@ -531,19 +495,13 @@ export default class PrFilesTab extends Vue {
 			if (file.status === 'added') {
 				return this.rightLines;
 			}
-			if (file.status === 'removed') {
-				return [];
-			}
-			return this.rightLines;
+			return file.status === 'removed' ? [] : this.rightLines;
 		}
 		if (file.patch) {
 			if (file.status === 'added') {
 				return this.patchSinglePanelLines;
 			}
-			if (file.status === 'removed') {
-				return [];
-			}
-			return this.parsedPatch.right;
+			return file.status === 'removed' ? [] : this.parsedPatch.right;
 		}
 		return [];
 	}
@@ -553,10 +511,7 @@ export default class PrFilesTab extends Vue {
 	}
 
 	get minimapScrollTop(): number {
-		if (this.isAddedOrRemoved) {
-			return 0;
-		}
-		return this.rightScrollTop;
+		return this.isAddedOrRemoved ? 0 : this.rightScrollTop;
 	}
 
 	onMinimapScrollTo(fraction: number) {
@@ -659,10 +614,7 @@ export default class PrFilesTab extends Vue {
 
 	indexForFilename(path: string): number {
 		const i = this.files.findIndex(f => f.filename === path);
-		if (i >= 0) {
-			return i;
-		}
-		return this.files.findIndex(f => f.previous_filename === path);
+		return i >= 0 ? i : this.files.findIndex(f => f.previous_filename === path);
 	}
 
 	private async waitContentIdle(timeoutMs = 25000): Promise<boolean> {
@@ -808,13 +760,7 @@ export default class PrFilesTab extends Vue {
 		const lc   = this.lineSnippetAt(side, lineNum);
 
 		const rect         = gutterCell?.getBoundingClientRect() ?? new DOMRect(120, window.innerHeight * 0.2, 0, 22);
-		this.activeComment = {
-			path,
-			line        : lineNum,
-			side,
-			rect,
-			lineContent : lc,
-		};
+		this.activeComment = { path, line : lineNum, side, rect, lineContent : lc };
 	}
 
 	private async applyThreadFocusRequest(req: ReviewThreadFocusRequest): Promise<void> {
@@ -1020,8 +966,8 @@ export default class PrFilesTab extends Vue {
 		return line === null ? null : { side, line };
 	}
 
-	private _debugLogged = false;
-	private _focusRequestToken = 0;
+	private _debugLogged            = false;
+	private _focusRequestToken      = 0;
 	private _firstChangeRevealToken = 0;
 
 	applyVirtualScroll() {
@@ -1150,10 +1096,7 @@ export default class PrFilesTab extends Vue {
 	}
 
 	hasAnyCommentAt(lineNum: number | null, side: 'LEFT' | 'RIGHT'): boolean {
-		if (!this.reviewEnabled) {
-			return false;
-		}
-		return this.hasThreadAt(lineNum, side) || this.hasPendingAt(lineNum, side);
+		return !this.reviewEnabled ? false : this.hasThreadAt(lineNum, side) || this.hasPendingAt(lineNum, side);
 	}
 
 	/** Pending or GitHub thread not yet resolved — pulsate gutter dot */
@@ -1166,10 +1109,7 @@ export default class PrFilesTab extends Vue {
 		}
 		const threadMap = side === 'LEFT' ? this.currentFileThreads.left : this.currentFileThreads.right;
 		const thread    = threadMap.get(lineNum);
-		if (!thread) {
-			return false;
-		}
-		return thread.comments.some(c => c.isResolved === false);
+		return !thread ? false : thread.comments.some(c => c.isResolved === false);
 	}
 
 	commentDotClass(lineNum: number | null, side: 'LEFT' | 'RIGHT'): string {
@@ -1219,13 +1159,7 @@ export default class PrFilesTab extends Vue {
 			return;
 		}
 		const rect         = td.getBoundingClientRect();
-		this.activeComment = {
-			path        : this.currentFile.filename,
-			line        : line.num,
-			side,
-			rect,
-			lineContent : line.content,
-		};
+		this.activeComment = { path : this.currentFile.filename, line : line.num, side, rect, lineContent : line.content };
 	}
 
 	closeComment() {

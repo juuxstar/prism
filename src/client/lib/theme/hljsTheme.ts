@@ -101,10 +101,7 @@ export function getStoredHljsThemeId(scheme: ResolvedScheme): string {
 		/* Ignore */
 	}
 	const list = hljsThemesForScheme(scheme);
-	if (raw && list.some(t => t.id === raw)) {
-		return raw;
-	}
-	return defaultHljsThemeId(scheme);
+	return raw && list.some(t => t.id === raw) ? raw : defaultHljsThemeId(scheme);
 }
 
 export function setStoredHljsThemeId(scheme: ResolvedScheme, id: string): void {

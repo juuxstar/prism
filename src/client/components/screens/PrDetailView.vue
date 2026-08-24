@@ -277,18 +277,21 @@
 </template>
 
 <script lang="ts">
-import PrCloseConfirmModal                      from '@/components/pr/PrCloseConfirmModal.vue';
-import PrDetailLoadState                        from '@/components/pr/PrDetailLoadState.vue';
-import PrDetailTabBar                           from '@/components/pr/PrDetailTabBar.vue';
-import PrErrorModal                             from '@/components/pr/PrErrorModal.vue';
-import PrMergeConfirmModal                      from '@/components/pr/PrMergeConfirmModal.vue';
-import PrModalDialog                            from '@/components/pr/PrModalDialog.vue';
-import PrTitleEditModal                         from '@/components/pr/PrTitleEditModal.vue';
-import PrWhitespaceViewedModal                  from '@/components/pr/PrWhitespaceViewedModal.vue';
-import SettingsPopup                            from '@/components/pr/SettingsPopup.vue';
-import { clearToken, getStoredToken }           from '@/lib/api/auth';
+import PrCloseConfirmModal            from '@/components/pr/PrCloseConfirmModal.vue';
+import PrDetailLoadState              from '@/components/pr/PrDetailLoadState.vue';
+import PrDetailTabBar                 from '@/components/pr/PrDetailTabBar.vue';
+import PrErrorModal                   from '@/components/pr/PrErrorModal.vue';
+import PrMergeConfirmModal            from '@/components/pr/PrMergeConfirmModal.vue';
+import PrModalDialog                  from '@/components/pr/PrModalDialog.vue';
+import PrTitleEditModal               from '@/components/pr/PrTitleEditModal.vue';
+import PrWhitespaceViewedModal        from '@/components/pr/PrWhitespaceViewedModal.vue';
+import SettingsPopup                  from '@/components/pr/SettingsPopup.vue';
+import { clearToken, getStoredToken } from '@/lib/api/auth';
 import type { GitWorkspaceStatus, LocalPrStatus, PullRequestCheckoutState } from '@/lib/api/gitCheckoutClient';
-import { checkoutPullRequestBranch, checkoutStateForPr, checkoutTargetForPr, commitLocalPullRequestChanges, fetchGitWorkspaceStatus, fetchLocalPullRequestFileContent, fetchLocalPullRequestFiles, fetchLocalPullRequestStatus, pushLocalPullRequestChanges } from '@/lib/api/gitCheckoutClient';
+import {
+	checkoutPullRequestBranch, checkoutStateForPr, checkoutTargetForPr, commitLocalPullRequestChanges, fetchGitWorkspaceStatus,
+	fetchLocalPullRequestFileContent, fetchLocalPullRequestFiles, fetchLocalPullRequestStatus, pushLocalPullRequestChanges
+} from '@/lib/api/gitCheckoutClient';
 import type { AsyncMergeResult, CheckRunDetail, IssueComment, PendingComment, PRFile, RepoLabel, ReviewComment } from '@/lib/api/githubClient';
 import GitHubClient                             from '@/lib/api/githubClient';
 import { isWhitespaceOnlyFileChange }           from '@/lib/diff/patchDiff';
@@ -296,7 +299,7 @@ import { loadLocalViewedFiles, setLocalFileViewed } from '@/lib/localViewedFiles
 import { loadPendingReview, savePendingReview } from '@/lib/pendingReviewStorage';
 import type { ResolvedScheme }                  from '@/lib/theme/colorScheme';
 import { getResolvedScheme, subscribeColorScheme } from '@/lib/theme/colorScheme';
-import { getDiffFontSize, getDiffTabSize, setDiffFontSize, setDiffTabSize, subscribeDiffSettings } from '@/lib/theme/diffSettings';
+import { getDiffFontSize, getDiffTabSize, setDiffFontSize, setDiffTabSize, subscribeDiffSettings }               from '@/lib/theme/diffSettings';
 import { getStoredHljsThemeId, loadHljsTheme, setStoredHljsThemeId } from '@/lib/theme/hljsTheme';
 import { timeAgo, toCursorFileHref }            from '@/lib/utils';
 
@@ -329,75 +332,75 @@ export default class PrDetailView extends Vue {
 	@Prop({ required : true }) readonly tab!: string;
 	@Prop({ default : false }) readonly embedded!: boolean;
 
-	pr: any = null;
-	checks: CheckRunDetail[] = [];
-	repoLabels: RepoLabel[] = [];
-	files: PRFile[] = [];
-	localFiles: PRFile[] = [];
+	pr: any                                  = null;
+	checks: CheckRunDetail[]                 = [];
+	repoLabels: RepoLabel[]                  = [];
+	files: PRFile[]                          = [];
+	localFiles: PRFile[]                     = [];
 	localViewedFiles: Record<string, string> = {};
-	loading = true;
-	checksLoading = true;
-	filesLoading = false;
-	localFilesLoading = false;
-	localFilesError = '';
-	error = '';
+	loading                = true;
+	checksLoading          = true;
+	filesLoading           = false;
+	localFilesLoading      = false;
+	localFilesError        = '';
+	error                  = '';
 	activeTab: PrDetailTab = 'overview';
-	tabSize = getDiffTabSize();
-	diffFontSize = getDiffFontSize();
+	tabSize                = getDiffTabSize();
+	diffFontSize           = getDiffFontSize();
 
 	resolvedScheme: ResolvedScheme = getResolvedScheme();
-	hljsTheme = getStoredHljsThemeId(getResolvedScheme());
+	hljsTheme                      = getStoredHljsThemeId(getResolvedScheme());
 	currentUser: { login: string; avatar_url?: string } | null = null;
-	viewedFiles: Record<string, string> = {};
-	reviewComments: ReviewComment[] = [];
-	issueComments: IssueComment[] = [];
-	pendingComments: PendingComment[] = [];
-	prNodeId = '';
-	reviewCommentsLoading = false;
-	submittingReview = false;
-	approvingPr = false;
-	mergingPr = false;
-	mergeConfirmOpen = false;
-	mergePrError = '';
-	titleEditOpen = false;
-	titleEditValue = '';
-	titleEditError = '';
-	updatingTitle = false;
-	togglingDraft = false;
-	whitespaceViewedConfirmOpen = false;
-	whitespaceViewedConfirmError = '';
-	markingWhitespaceViewed = false;
+	viewedFiles: Record<string, string>                        = {};
+	reviewComments: ReviewComment[]                            = [];
+	issueComments: IssueComment[]                              = [];
+	pendingComments: PendingComment[]                          = [];
+	prNodeId                                                   = '';
+	reviewCommentsLoading                                      = false;
+	submittingReview                                           = false;
+	approvingPr                                                = false;
+	mergingPr                                                  = false;
+	mergeConfirmOpen                                           = false;
+	mergePrError                                               = '';
+	titleEditOpen                                              = false;
+	titleEditValue                                             = '';
+	titleEditError                                             = '';
+	updatingTitle                                              = false;
+	togglingDraft                                              = false;
+	whitespaceViewedConfirmOpen                                = false;
+	whitespaceViewedConfirmError                               = '';
+	markingWhitespaceViewed                                    = false;
 	reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null = null;
 	mergeConfirmUnmetRequirements = false;
-	closeConfirmOpen = false;
-	closeConfirmError = '';
-	closingPr = false;
-	approvePrError = '';
+	closeConfirmOpen              = false;
+	closeConfirmError             = '';
+	closingPr                     = false;
+	approvePrError                = '';
 	checkoutStatus: GitWorkspaceStatus | null = null;
-	localPrStatus: LocalPrStatus | null = null;
-	checkingOutPr = false;
-	committingLocalChanges = false;
-	pushingLocalChanges = false;
-	refreshingOverview = false;
-	checkoutError = '';
-	localGitError = '';
-	localCommitModalOpen = false;
-	localCommitMessage = '';
-	localCommitError = '';
+	localPrStatus: LocalPrStatus | null       = null;
+	checkingOutPr                             = false;
+	committingLocalChanges                    = false;
+	pushingLocalChanges                       = false;
+	refreshingOverview                        = false;
+	checkoutError                             = '';
+	localGitError                             = '';
+	localCommitModalOpen                      = false;
+	localCommitMessage                        = '';
+	localCommitError                          = '';
 	/** When set while the PR Files tab is shown, selects the diff file and focuses the comment thread there. Cleared after the tab handles it. */
 	pendingThreadFocus: null | { path: string; line: number; side: 'LEFT' | 'RIGHT'; nonce: number } = null;
 
 	_checksTimer: ReturnType<typeof setInterval> | null = null;
-	_unsubColorScheme: (() => void) | null = null;
-	_unsubDiffSettings: (() => void) | null = null;
-	_onDocumentVisibility: (() => void) | null = null;
-	_originalTitle = '';
-	mergePollCancelled = false;
-	_loadFilesPromise: Promise<void> | null = null;
-	_loadLocalFilesPromise: Promise<void> | null = null;
+	_unsubColorScheme: (() => void) | null              = null;
+	_unsubDiffSettings: (() => void) | null             = null;
+	_onDocumentVisibility: (() => void) | null          = null;
+	_originalTitle                                = '';
+	mergePollCancelled                            = false;
+	_loadFilesPromise: Promise<void> | null       = null;
+	_loadLocalFilesPromise: Promise<void> | null  = null;
 	_loadViewedStatePromise: Promise<void> | null = null;
 	embeddedFileIndex = 0;
-	localFileIndex = 0;
+	localFileIndex    = 0;
 
 	readonly timeAgo = timeAgo;
 
@@ -532,10 +535,7 @@ export default class PrDetailView extends Vue {
 
 	get reviewPct(): number {
 		const total = this.reviewTotal;
-		if (!total) {
-			return 0;
-		}
-		return Math.min(100, Math.round((this.reviewedCount / total) * 100));
+		return !total ? 0 : Math.min(100, Math.round((this.reviewedCount / total) * 100));
 	}
 
 	get checkoutState(): PullRequestCheckoutState | null {
@@ -660,10 +660,7 @@ export default class PrDetailView extends Vue {
 	private async loadCurrentUser(): Promise<void> {
 		const cached = GitHubClient.getUser();
 		if (cached?.login) {
-			this.currentUser = {
-				login      : cached.login,
-				avatar_url : cached.avatar_url,
-			};
+			this.currentUser = { login : cached.login, avatar_url : cached.avatar_url };
 			return;
 		}
 		if (!getStoredToken()) {
@@ -671,10 +668,7 @@ export default class PrDetailView extends Vue {
 		}
 		try {
 			const user       = await GitHubClient.fetchCurrentUser();
-			this.currentUser = {
-				login      : user.login,
-				avatar_url : user.avatar_url,
-			};
+			this.currentUser = { login : user.login, avatar_url : user.avatar_url };
 		}
 		catch {
 			this.currentUser = null;
@@ -1059,12 +1053,7 @@ export default class PrDetailView extends Vue {
 		if (!headSha) {
 			return {};
 		}
-		return loadLocalViewedFiles({
-			owner    : this.owner,
-			repo     : this.repo,
-			prNumber : this.routeBackedPrNumber,
-			headSha,
-		}, files);
+		return loadLocalViewedFiles({ owner : this.owner, repo : this.repo, prNumber : this.routeBackedPrNumber, headSha }, files);
 	}
 
 	async loadReviewComments() {
@@ -1154,12 +1143,7 @@ export default class PrDetailView extends Vue {
 		await this.ensureFilesLoaded();
 		const side = nav.side === 'LEFT' ? 'LEFT' : 'RIGHT';
 		this.switchTab('pr-files');
-		this.pendingThreadFocus = {
-			path  : nav.path,
-			line  : nav.line,
-			side,
-			nonce : Date.now(),
-		};
+		this.pendingThreadFocus = { path : nav.path, line : nav.line, side, nonce : Date.now() };
 	}
 
 	onThreadFocusHandled() {

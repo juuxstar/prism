@@ -124,18 +124,12 @@ export default class PrItem extends Vue {
 
 	get detailParams(): { owner: string; repo: string; number: number } | null {
 		const m = this.pr.repository_url.match(/repos\/([^/]+)\/([^/]+)/);
-		if (!m) {
-			return null;
-		}
-		return { owner : m[1], repo : m[2], number : this.pr.number };
+		return !m ? null : { owner : m[1], repo : m[2], number : this.pr.number };
 	}
 
 	get detailUrl(): string {
 		const params = this.detailParams;
-		if (!params) {
-			return '';
-		}
-		return `/pull-request/${params.owner}/${params.repo}/${params.number}`;
+		return !params ? '' : `/pull-request/${params.owner}/${params.repo}/${params.number}`;
 	}
 
 	get sizeDots(): number {

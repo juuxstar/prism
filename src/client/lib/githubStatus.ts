@@ -31,10 +31,7 @@ function keySeverity(status: string): 'ok' | 'warn' | 'bad' {
 	if (status === 'degraded_performance' || status === 'under_maintenance') {
 		return 'warn';
 	}
-	if (status === 'partial_outage' || status === 'major_outage') {
-		return 'bad';
-	}
-	return 'warn';
+	return status === 'partial_outage' || status === 'major_outage' ? 'bad' : 'warn';
 }
 
 function levelFromPageIndicator(
@@ -61,10 +58,7 @@ function combinedLevel(
 		if (x === 'ok') {
 			return 0;
 		}
-		if (x === 'warn') {
-			return 1;
-		}
-		return 2;
+		return x === 'warn' ? 1 : 2;
 	};
 	const worst = (a: 'ok' | 'warn' | 'bad', b: 'ok' | 'warn' | 'bad') => (rank(a) >= rank(b) ? a : b);
 	return keys.reduce((acc, k) => worst(acc, k), page);

@@ -481,7 +481,9 @@ interface TestFailureState {
 	failures: TestFailure[];
 }
 
-@Component({ emits : [ 'add-label', 'remove-label', 'comments-updated', 'approve-pr', 'merge-pr', 'close-pr', 'toggle-draft', 'open-review-in-files', 'checkout-pr', 'commit-local-changes', 'push-local-changes' ] })
+@Component({
+	emits : [ 'add-label', 'remove-label', 'comments-updated', 'approve-pr', 'merge-pr', 'close-pr', 'toggle-draft', 'open-review-in-files', 'checkout-pr', 'commit-local-changes', 'push-local-changes' ],
+})
 export default class PrOverviewTab extends Vue {
 
 	@Prop({ required : true }) readonly pr!: any;
@@ -513,9 +515,9 @@ export default class PrOverviewTab extends Vue {
 	readonly timeAgo = timeAgo;
 
 	labelDropdownOpen = false;
-	labelSearch = '';
+	labelSearch       = '';
 	/** Root review comment id while a resolve/unresolve request is in flight */
-	resolveTogglingThreadId: number | null = null;
+	resolveTogglingThreadId: number | null              = null;
 	testFailureStates: Record<string, TestFailureState> = {};
 
 	/** Bumped every second while checks are in progress so elapsed times stay current. */
@@ -526,28 +528,20 @@ export default class PrOverviewTab extends Vue {
 	resolvedThreadsExpanded: Record<number, true> = {};
 
 	reviewPopoverThread: OverviewThread | null = null;
-	reviewPopoverAnchor: DOMRect | null = null;
-	reviewPopoverLine: number | null = null;
-	reviewPopoverSide: 'LEFT' | 'RIGHT' = 'RIGHT';
+	reviewPopoverAnchor: DOMRect | null        = null;
+	reviewPopoverLine: number | null           = null;
+	reviewPopoverSide: 'LEFT' | 'RIGHT'        = 'RIGHT';
 
-	issueReplyDraftId: number | null = null;
-	issueReplyBody = '';
-	issueReplySubmitting = false;
-	prUrlCopyState: 'idle' | 'copied' = 'idle';
-	selectedWorktreePath = '';
+	issueReplyDraftId: number | null        = null;
+	issueReplyBody                          = '';
+	issueReplySubmitting                    = false;
+	prUrlCopyState: 'idle' | 'copied'       = 'idle';
+	selectedWorktreePath                    = '';
 	private prUrlCopyResetId: number | null = null;
 
 	get reviewPopoverThreadPayload(): CommentThread | null {
 		const t = this.reviewPopoverThread;
-		if (!t || t.line == null) {
-			return null;
-		}
-		return {
-			path     : t.path,
-			line     : t.line,
-			side     : this.toReviewSide(t.side),
-			comments : t.comments,
-		};
+		return !t || t.line == null ? null : { path : t.path, line : t.line, side : this.toReviewSide(t.side), comments : t.comments };
 	}
 
 	get reviewPopoverSuggestionLineSnippet(): string {
@@ -591,10 +585,7 @@ export default class PrOverviewTab extends Vue {
 	}
 
 	get authorDisplayName(): string {
-		if (!this.pr?.user?.login) {
-			return '—';
-		}
-		return GitHubClient.getFirstName(this.pr.user.login);
+		return !this.pr?.user?.login ? '—' : GitHubClient.getFirstName(this.pr.user.login);
 	}
 
 	get showApproveAction(): boolean {
@@ -662,10 +653,7 @@ export default class PrOverviewTab extends Vue {
 	}
 
 	get worktreeOptions(): GitCheckout[] {
-		if (this.checkoutStatus?.mode !== 'worktree-parent') {
-			return [];
-		}
-		return this.checkoutStatus.checkouts;
+		return this.checkoutStatus?.mode !== 'worktree-parent' ? [] : this.checkoutStatus.checkouts;
 	}
 
 	get showWorktreeSelector(): boolean {
@@ -676,10 +664,7 @@ export default class PrOverviewTab extends Vue {
 		if (this.checkingOutPr) {
 			return true;
 		}
-		if (this.showWorktreeSelector) {
-			return !this.selectedWorktreePath;
-		}
-		return false;
+		return this.showWorktreeSelector ? !this.selectedWorktreePath : false;
 	}
 
 	get checkoutStatusText(): string {
@@ -689,17 +674,11 @@ export default class PrOverviewTab extends Vue {
 		if (this.checkoutStatus?.mode === 'worktree-parent') {
 			return `${this.checkoutStatus.checkouts.length} worktrees available`;
 		}
-		if (this.checkoutStatus?.mode === 'single') {
-			return 'Checkout workspace ready';
-		}
-		return '';
+		return this.checkoutStatus?.mode === 'single' ? 'Checkout workspace ready' : '';
 	}
 
 	get checkoutStatusTitle(): string {
-		if (this.checkoutState) {
-			return this.checkoutState.path;
-		}
-		return this.checkoutStatus?.workspaceDir || '';
+		return this.checkoutState ? this.checkoutState.path : this.checkoutStatus?.workspaceDir || '';
 	}
 
 	get cursorCheckoutPath(): string {
@@ -775,12 +754,7 @@ export default class PrOverviewTab extends Vue {
 	get sortedOverviewComments(): OverviewRow[] {
 		const rows: OverviewRow[] = [];
 		for (const comment of this.issueComments || []) {
-			rows.push({
-				kind     : 'issue',
-				key      : `issue-${comment.id}`,
-				sortTime : new Date(comment.created_at).getTime(),
-				comment,
-			});
+			rows.push({ kind : 'issue', key : `issue-${comment.id}`, sortTime : new Date(comment.created_at).getTime(), comment });
 		}
 		for (const thread of this.reviewCommentThreads) {
 			rows.push({
@@ -930,20 +904,14 @@ export default class PrOverviewTab extends Vue {
 		if (this.isCheckPassed(check)) {
 			return 'check-passed';
 		}
-		if (this.isCheckFailed(check)) {
-			return 'check-failed';
-		}
-		return 'check-pending';
+		return this.isCheckFailed(check) ? 'check-failed' : 'check-pending';
 	}
 
 	checkIcon(check: CheckRunDetail): string {
 		if (this.isCheckPassed(check)) {
 			return '✓';
 		}
-		if (this.isCheckFailed(check)) {
-			return '✗';
-		}
-		return '●';
+		return this.isCheckFailed(check) ? '✗' : '●';
 	}
 
 	checkLabel(check: CheckRunDetail): string {
@@ -953,10 +921,7 @@ export default class PrOverviewTab extends Vue {
 		if (check.status === 'in_progress') {
 			return 'in progress';
 		}
-		if (check.status === 'queued') {
-			return 'queued';
-		}
-		return 'pending';
+		return check.status === 'queued' ? 'queued' : 'pending';
 	}
 
 	checkDuration(check: CheckRunDetail): string | null {
@@ -1035,10 +1000,7 @@ export default class PrOverviewTab extends Vue {
 	}
 
 	failureAnnotations(check: CheckRunDetail): CheckAnnotation[] {
-		if (!this.isCheckFailed(check)) {
-			return [];
-		}
-		return check.annotations.filter(a => a.level === 'failure' || a.level === 'warning');
+		return !this.isCheckFailed(check) ? [] : check.annotations.filter(a => a.level === 'failure' || a.level === 'warning');
 	}
 
 	labelStyle(label: any): Record<string, string> {
@@ -1060,11 +1022,7 @@ export default class PrOverviewTab extends Vue {
 			return;
 		}
 		this.closeReviewReplyPopover();
-		this.$emit('open-review-in-files', {
-			path : thread.path,
-			line : thread.line,
-			side : this.toReviewSide(thread.side),
-		});
+		this.$emit('open-review-in-files', { path : thread.path, line : thread.line, side : this.toReviewSide(thread.side) });
 	}
 
 	openReviewReplyPopover(thread: OverviewThread, e: MouseEvent): void {

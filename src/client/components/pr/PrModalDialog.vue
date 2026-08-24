@@ -39,13 +39,7 @@ const props = withDefaults(defineProps<{
 	closeDisabled?: boolean;
 	focusOnOpen?: boolean;
 	showClose?: boolean;
-}>(), {
-	closeDisabled   : false,
-	closeOnBackdrop : true,
-	dialogClass     : '',
-	focusOnOpen     : true,
-	showClose       : false,
-});
+}>(), { closeDisabled : false, closeOnBackdrop : true, dialogClass : '', focusOnOpen : true, showClose : false });
 
 const emit     = defineEmits<{ close: [] }>();
 const dialogEl = ref<HTMLElement | null>(null);

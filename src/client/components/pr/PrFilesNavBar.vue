@@ -155,10 +155,7 @@ function findUnviewedFile(direction: 1 | -1): number {
 		}
 	}
 	const next = idx0 + direction;
-	if (next >= 0 && next < len) {
-		return next;
-	}
-	return -1;
+	return next >= 0 && next < len ? next : -1;
 }
 
 const prevUnviewedIndex = computed(() => findUnviewedFile(-1));
@@ -176,10 +173,7 @@ function activeElementIsTextEditing(): boolean {
 	}
 	if (tag === 'input') {
 		const type = (el as HTMLInputElement).type?.toLowerCase() ?? 'text';
-		if (type === 'checkbox' || type === 'radio' || type === 'range' || type === 'file') {
-			return false;
-		}
-		return true;
+		return type === 'checkbox' || type === 'radio' || type === 'range' || type === 'file' ? false : true;
 	}
 	return el.isContentEditable;
 }

@@ -149,10 +149,7 @@ export class GitService {
 			await runGit(checkout.path, [ 'checkout', '-b', target.headRef, 'FETCH_HEAD' ], checkoutEnv);
 		}
 
-		return {
-			status       : this.serializeGitWorkspaceStatus(await this.detectGitWorkspace()),
-			checkoutPath : checkout.path,
-		};
+		return { status : this.serializeGitWorkspaceStatus(await this.detectGitWorkspace()), checkoutPath : checkout.path };
 	}
 
 	/** Restore a worktree to its directory-named branch at the current origin/dev revision. */
@@ -210,15 +207,19 @@ export class GitService {
 
 		const tracked = await listChangedTrackedFiles(checkout, 'HEAD', env);
 		const files   = await Promise.all(tracked.map(async file => {
-			const diffPaths      = file.previous_filename ? [ file.previous_filename, file.filename ] : [ file.filename ];
-			const statsRaw       = await runGit(checkout.path, [ 'diff', '--find-renames', '--numstat', 'HEAD', '--', ...diffPaths ], env, { trim : false });
+			const diffPaths = file.previous_filename ? [ file.previous_filename, file.filename ] : [ file.filename ];
+			const statsRaw  = await runGit(checkout.path, [ 'diff', '--find-renames', '--numstat', 'HEAD', '--', ...diffPaths ], env, {
+				trim : false,
+			});
 			const firstStats     = statsRaw.split('\n').find(Boolean);
 			const [ adds, dels ] = firstStats?.split('\t') ?? [];
 			const additions      = parseInt(adds ?? '', 10);
 			const deletions      = parseInt(dels ?? '', 10);
-			const patchRaw       = await runGit(checkout.path, [ 'diff', '--find-renames', '--unified=3', 'HEAD', '--', ...diffPaths ], env, { trim : false });
-			const hunkStart      = patchRaw.indexOf('@@');
-			const patch          = hunkStart < 0 ? undefined : patchRaw.slice(hunkStart).trimEnd();
+			const patchRaw       = await runGit(checkout.path, [ 'diff', '--find-renames', '--unified=3', 'HEAD', '--', ...diffPaths ], env, {
+				trim : false,
+			});
+			const hunkStart = patchRaw.indexOf('@@');
+			const patch     = hunkStart < 0 ? undefined : patchRaw.slice(hunkStart).trimEnd();
 			return {
 				...file,
 				sha       : '',
@@ -238,14 +239,7 @@ export class GitService {
 			if (content) {
 				additions = content.endsWith('\n') ? content.split('\n').length - 1 : content.split('\n').length;
 			}
-			return {
-				sha       : '',
-				filename  : path,
-				status    : 'added',
-				additions,
-				deletions : 0,
-				changes   : additions,
-			};
+			return { sha : '', filename : path, status : 'added', additions, deletions : 0, changes : additions };
 		}));
 
 		return [ ...files, ...untrackedFiles ].sort((a, b) => a.filename.localeCompare(b.filename));
@@ -340,11 +334,7 @@ export class GitService {
 			throw new BadRequestError('There are no committed changes to push');
 		}
 		await runGit(checkout.path, [ 'push', `https://github.com/${target.headRepo}.git`, `HEAD:refs/heads/${target.headRef}` ], env);
-		return {
-			...status,
-			hasUnpushedCommits : false,
-			aheadCount         : 0,
-		};
+		return { ...status, hasUnpushedCommits : false, aheadCount : 0 };
 	}
 
 	private async findCheckoutForTarget(rawTarget: CheckoutTarget): Promise<{ checkout: GitCheckout; target: Required<CheckoutTarget> }> {
@@ -533,10 +523,7 @@ async function tryRunGit(cwd: string, args: string[], env?: NodeJS.ProcessEnv): 
 function normalizeGithubRepo(url: string): string | null {
 	const trimmed = url.trim().replace(/\.git$/, '').replace(/\/$/, '');
 	const match   = trimmed.match(/github\.com[:/]([^/\s:]+)\/([^/\s]+)$/i);
-	if (!match) {
-		return null;
-	}
-	return `${match[1]}/${match[2]}`.toLowerCase();
+	return !match ? null : `${match[1]}/${match[2]}`.toLowerCase();
 }
 
 async function resolveMountedWorktreeGitEnv(path: string, workspacePath: string): Promise<NodeJS.ProcessEnv | undefined> {
@@ -613,10 +600,7 @@ function parseDivergence(raw: string | null): { aheadCount?: number; behindCount
 		return {};
 	}
 	const [ behind, ahead ] = raw.split(/\s+/).map(value => parseInt(value, 10));
-	if (!Number.isFinite(ahead) || !Number.isFinite(behind)) {
-		return {};
-	}
-	return { aheadCount : ahead, behindCount : behind };
+	return !Number.isFinite(ahead) || !Number.isFinite(behind) ? {} : { aheadCount : ahead, behindCount : behind };
 }
 
 function matchesCheckout(checkout: GitCheckout, target: Required<CheckoutTarget>): boolean {

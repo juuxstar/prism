@@ -59,10 +59,7 @@ function httpStatusForError(err: unknown): number {
 	if (err instanceof HttpError) {
 		return err.status;
 	}
-	if (isBodyParserError(err)) {
-		return 400;
-	}
-	return 500;
+	return isBodyParserError(err) ? 400 : 500;
 }
 
 function isBodyParserError(err: unknown): boolean {

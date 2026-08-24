@@ -215,11 +215,11 @@ export default class PrBoard extends Vue {
 	@Prop({ default : () => [] }) readonly worktreePrs!: any[];
 
 	alphaHidden = ALPHA_HIDDEN_LABELS;
-	betaHidden = BETA_HIDDEN_LABELS;
+	betaHidden  = BETA_HIDDEN_LABELS;
 	mergeHidden = MERGE_HIDDEN_LABELS;
-	emptySet = new Set<string>();
+	emptySet    = new Set<string>();
 	resettingWorktreePath: string | null = null;
-	pullingWorktreePath: string | null = null;
+	pullingWorktreePath: string | null   = null;
 
 	get teamPrefix(): string {
 		return TEAM_GREEK[this.selectedTeam] || 'α';
@@ -265,10 +265,7 @@ export default class PrBoard extends Vue {
 				return m && m[1] === this.currentRepo;
 			});
 		}
-		if (this.currentTypeFilter === 'draft') {
-			return prs.filter(pr => pr.draft);
-		}
-		return prs.filter(pr => !pr.draft);
+		return this.currentTypeFilter === 'draft' ? prs.filter(pr => pr.draft) : prs.filter(pr => !pr.draft);
 	}
 
 	get categorized(): { alpha: any[]; beta: any[]; gamma: any[]; readyToMerge: any[]; other: any[] } {
@@ -312,15 +309,19 @@ export default class PrBoard extends Vue {
 	get orderedOther() {
 		return this.applySavedOrder('other', this.categorized.other);
 	}
+
 	get orderedAlpha() {
 		return this.applySavedOrder('alpha', this.categorized.alpha);
 	}
+
 	get orderedBeta() {
 		return this.applySavedOrder('beta', this.categorized.beta);
 	}
+
 	get orderedGamma() {
 		return this.applySavedOrder('gamma', this.categorized.gamma);
 	}
+
 	get orderedMerge() {
 		return this.applySavedOrder('merge', this.categorized.readyToMerge);
 	}
@@ -391,7 +392,12 @@ export default class PrBoard extends Vue {
 	}
 
 	private findSectionForPR(prId: string): string | null {
-		const sections: Record<string, any[]> = { other : this.orderedOther, alpha : this.orderedAlpha, beta : this.orderedBeta, gamma : this.orderedGamma };
+		const sections: Record<string, any[]> = {
+			other : this.orderedOther,
+			alpha : this.orderedAlpha,
+			beta  : this.orderedBeta,
+			gamma : this.orderedGamma,
+		};
 		for (const [ name, prs ] of Object.entries(sections)) {
 			if (prs.some(p => String(p.id) === prId)) {
 				return name;
@@ -400,10 +406,7 @@ export default class PrBoard extends Vue {
 		if (this.waitingOnChecks.some(p => String(p.id) === prId)) {
 			return 'merge';
 		}
-		if (this.readyMerge.some(p => String(p.id) === prId)) {
-			return 'merge';
-		}
-		return null;
+		return this.readyMerge.some(p => String(p.id) === prId) ? 'merge' : null;
 	}
 
 	private getSectionPRs(section: string): any[] {

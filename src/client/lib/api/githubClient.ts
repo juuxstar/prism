@@ -47,20 +47,21 @@ const PR_CHECKS_FRAGMENT = `
 class GitHubAPI {
 
 	private token: string | null = null;
-	private user: any = null;
-	private apiBase = '/api/github';
-	private graphqlUrl = '/api/github/graphql';
-	private userNameCache = new Map<string, string>();
-	private botCommentCache = new Map<number, BotCounts>();
-	private prStatsCache = new Map<number, PRStats>();
-	private checksCache = new Map<number, ChecksSummary>();
-	private prMergeabilityCache = new Map<number, PRMergeability>();
-	private worktreePrCache = new Map<string, any | null>();
-	private oauthScopes = new Set<string>();
+	private user: any            = null;
+	private apiBase              = '/api/github';
+	private graphqlUrl           = '/api/github/graphql';
+	private userNameCache        = new Map<string, string>();
+	private botCommentCache      = new Map<number, BotCounts>();
+	private prStatsCache         = new Map<number, PRStats>();
+	private checksCache          = new Map<number, ChecksSummary>();
+	private prMergeabilityCache  = new Map<number, PRMergeability>();
+	private worktreePrCache      = new Map<string, any | null>();
+	private oauthScopes          = new Set<string>();
 
 	setToken(t: string) {
 		this.token = t;
 	}
+
 	getToken() {
 		return this.token;
 	}
@@ -591,9 +592,7 @@ class GitHubAPI {
 				'Accept'        : 'application/vnd.github.v3.full+json',
 				'Cache-Control' : 'no-cache',
 			},
-		} : {
-			headers : { Accept : 'application/vnd.github.v3.full+json' },
-		});
+		} : { headers : { Accept : 'application/vnd.github.v3.full+json' } });
 		return normalizePullRequest(pr);
 	}
 
@@ -610,10 +609,7 @@ class GitHubAPI {
 		try {
 			const data = await this.graphql(QUERY, { owner, repo, number });
 			const rd   = data.repository?.pullRequest?.reviewDecision;
-			if (rd === 'APPROVED' || rd === 'CHANGES_REQUESTED' || rd === 'REVIEW_REQUIRED') {
-				return rd;
-			}
-			return null;
+			return rd === 'APPROVED' || rd === 'CHANGES_REQUESTED' || rd === 'REVIEW_REQUIRED' ? rd : null;
 		}
 		catch {
 			return null;
@@ -822,12 +818,7 @@ class GitHubAPI {
 
 	async fetchRepoLabels(owner: string, repo: string): Promise<RepoLabel[]> {
 		const labels = await this.fetchAllPages(`/repos/${owner}/${repo}/labels`);
-		return labels.map((l: any) => ({
-			id          : l.id,
-			name        : l.name,
-			color       : l.color,
-			description : l.description,
-		}));
+		return labels.map((l: any) => ({ id : l.id, name : l.name, color : l.color, description : l.description }));
 	}
 
 	async fetchPRFilesViewedState(owner: string, repo: string, number: number): Promise<{ viewedFiles: Record<string, string>; prNodeId: string }> {
@@ -1068,10 +1059,7 @@ class GitHubAPI {
 		  clientMutationId
 		}
 	  }`;
-		await this.graphql(MUTATION, {
-			suggestionId : commentNodeId,
-			message      : commitMessage || 'Apply suggestion from review',
-		});
+		await this.graphql(MUTATION, { suggestionId : commentNodeId, message : commitMessage || 'Apply suggestion from review' });
 	}
 
 }
@@ -1254,21 +1242,14 @@ function refDescriptor(repository: any, refName: unknown, oid: unknown): { ref: 
 	if (typeof refName !== 'string' || !refName || typeof fullName !== 'string' || !fullName) {
 		return null;
 	}
-	return {
-		ref  : refName,
-		sha  : typeof oid === 'string' ? oid : '',
-		repo : { full_name : fullName },
-	};
+	return { ref : refName, sha : typeof oid === 'string' ? oid : '', repo : { full_name : fullName } };
 }
 
 function rateLimitResetFromHeaders(resetHeader: string | null, retryAfter: string | null): Date | null {
 	if (resetHeader) {
 		return new Date(parseInt(resetHeader, 10) * 1000);
 	}
-	if (retryAfter) {
-		return new Date(Date.now() + parseInt(retryAfter, 10) * 1000);
-	}
-	return null;
+	return retryAfter ? new Date(Date.now() + parseInt(retryAfter, 10) * 1000) : null;
 }
 
 /** Build a readable message from GitHub REST error JSON (`message` + `errors`). */
@@ -1298,10 +1279,7 @@ function formatGithubRestErrorMessage(status: number, body: any): string {
 	if (pieces.length) {
 		return pieces.join('; ');
 	}
-	if (main) {
-		return main;
-	}
-	return fallback;
+	return main ? main : fallback;
 }
 
 /**
@@ -1325,10 +1303,7 @@ function normalizePullRequest(pr: any): any {
 }
 
 export function isPullRequestConflicted(pr: any): boolean {
-	if (!pr || typeof pr !== 'object') {
-		return false;
-	}
-	return pr.mergeable === false || pr.mergeable_state === 'dirty';
+	return !pr || typeof pr !== 'object' ? false : pr.mergeable === false || pr.mergeable_state === 'dirty';
 }
 
 function apiError(msg: string, extra?: Partial<ApiError>): ApiError {
@@ -1502,10 +1477,7 @@ export function parseCommentType(body: string): CommentType {
 	if (body.startsWith('\u{26A0}')) {
 		return 'change-required';
 	}
-	if (body.startsWith('\u{2753}')) {
-		return 'question';
-	}
-	return 'suggestion';
+	return body.startsWith('\u{2753}') ? 'question' : 'suggestion';
 }
 
 export function stripCommentTypePrefix(body: string): string {

@@ -37,18 +37,15 @@ export default class DiffMinimap extends Vue {
 	@Prop({ default : 0 }) readonly scrollTop!: number;
 	@Prop({ default : 0 }) readonly totalContentHeight!: number;
 
-	hoverY = -1;
-	dragging = false;
+	hoverY          = -1;
+	dragging        = false;
 	containerHeight = 0;
 
 	private _resizeObserver: ResizeObserver | null = null;
-	private _unsubScheme: (() => void) | null = null;
+	private _unsubScheme: (() => void) | null      = null;
 
 	get viewportFraction(): number {
-		if (this.totalContentHeight <= 0) {
-			return 1;
-		}
-		return Math.min(1, this.viewportHeight / this.totalContentHeight);
+		return this.totalContentHeight <= 0 ? 1 : Math.min(1, this.viewportHeight / this.totalContentHeight);
 	}
 
 	get viewportIndicatorHeight(): number {
@@ -57,19 +54,13 @@ export default class DiffMinimap extends Vue {
 
 	get scrollFraction(): number {
 		const scrollable = this.totalContentHeight - this.viewportHeight;
-		if (scrollable <= 0) {
-			return 0;
-		}
-		return Math.min(1, this.scrollTop / scrollable);
+		return scrollable <= 0 ? 0 : Math.min(1, this.scrollTop / scrollable);
 	}
 
 	get viewportStyle(): Record<string, string> {
 		const maxTop = this.containerHeight - this.viewportIndicatorHeight;
 		const top    = maxTop * this.scrollFraction;
-		return {
-			top    : `${top}px`,
-			height : `${this.viewportIndicatorHeight}px`,
-		};
+		return { top : `${top}px`, height : `${this.viewportIndicatorHeight}px` };
 	}
 
 	mounted() {

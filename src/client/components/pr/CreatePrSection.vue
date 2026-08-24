@@ -31,7 +31,7 @@ export default class CreatePrSection extends Vue {
 
 	@Prop({ required : true }) readonly branches!: BranchEntry[];
 
-	titles: Record<string, string> = {};
+	titles: Record<string, string>    = {};
 	creating: Record<string, boolean> = {};
 
 	@Watch('branches', { immediate : true })

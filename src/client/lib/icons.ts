@@ -23,10 +23,7 @@ const PATHS: Record<string, string | string[]> = {
 };
 
 function buildPaths(pathData: string | string[]): string {
-	if (Array.isArray(pathData)) {
-		return pathData.map(d => `<path d="${d}"></path>`).join('');
-	}
-	return `<path d="${pathData}"></path>`;
+	return Array.isArray(pathData) ? pathData.map(d => `<path d="${d}"></path>`).join('') : `<path d="${pathData}"></path>`;
 }
 
 export function iconSvg(name: string, width = 16, height = width, attrs = ''): string {

@@ -39,10 +39,7 @@ import { iconSvg }   from '@/lib/icons';
 import { Component, Prop, Vue } from 'vue-facing-decorator';
 
 /** Top navigation bar with repo/team selectors, type filters, refresh, and user info. */
-@Component({
-	components : { SettingsPopup },
-	emits      : [ 'set-type-filter', 'set-repo', 'set-team', 'refresh', 'logout' ],
-})
+@Component({ components : { SettingsPopup }, emits : [ 'set-type-filter', 'set-repo', 'set-team', 'refresh', 'logout' ] })
 export default class AppHeader extends Vue {
 
 	@Prop({ required : true }) readonly user!: Record<string, unknown> | null;

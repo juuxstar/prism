@@ -53,12 +53,7 @@ export function computeInlineHighlights(oldText: string, newText: string): { old
 
 		for (let k = -d; k <= d; k += 2) {
 			let x: number;
-			if (k === -d || (k !== d && v[offset + k - 1] < v[offset + k + 1])) {
-				x = v[offset + k + 1];
-			}
-			else {
-				x = v[offset + k - 1] + 1;
-			}
+			x     = k === -d || (k !== d && v[offset + k - 1] < v[offset + k + 1]) ? v[offset + k + 1] : v[offset + k - 1] + 1;
 			let y = x - k;
 			while (x < n && y < m && oldToks[x] === newToks[y]) {
 				x++;
@@ -76,15 +71,9 @@ export function computeInlineHighlights(oldText: string, newText: string): { old
 	let cy = m;
 
 	for (let d = trace.length - 1; d > 0; d--) {
-		const prev = trace[d];
-		const k    = cx - cy;
-		let prevK: number;
-		if (k === -d || (k !== d && prev[offset + k - 1] < prev[offset + k + 1])) {
-			prevK = k + 1;
-		}
-		else {
-			prevK = k - 1;
-		}
+		const prev  = trace[d];
+		const k     = cx - cy;
+		const prevK = k === -d || (k !== d && prev[offset + k - 1] < prev[offset + k + 1]) ? k + 1 : k - 1;
 		const prevX = prev[offset + prevK];
 		const prevY = prevX - prevK;
 
@@ -121,8 +110,14 @@ export function computeInlineHighlights(oldText: string, newText: string): { old
 	const oldOffsets = cumulativeOffsets(oldToks);
 	const newOffsets = cumulativeOffsets(newToks);
 
-	const oldRanges = mergeConsecutiveRanges(edits.filter(e => e.type === 'del').map(e => ({ start : oldOffsets[e.oldIdx!], end : oldOffsets[e.oldIdx!] + oldToks[e.oldIdx!].length })));
-	const newRanges = mergeConsecutiveRanges(edits.filter(e => e.type === 'add').map(e => ({ start : newOffsets[e.newIdx!], end : newOffsets[e.newIdx!] + newToks[e.newIdx!].length })));
+	const oldRanges = mergeConsecutiveRanges(edits.filter(e => e.type === 'del').map(e => ({
+		start : oldOffsets[e.oldIdx!],
+		end   : oldOffsets[e.oldIdx!] + oldToks[e.oldIdx!].length,
+	})));
+	const newRanges = mergeConsecutiveRanges(edits.filter(e => e.type === 'add').map(e => ({
+		start : newOffsets[e.newIdx!],
+		end   : newOffsets[e.newIdx!] + newToks[e.newIdx!].length,
+	})));
 
 	return { oldRanges, newRanges };
 }

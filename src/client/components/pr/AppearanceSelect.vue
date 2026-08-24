@@ -16,7 +16,7 @@ import { Component, Vue } from 'vue-facing-decorator';
 @Component
 export default class AppearanceSelect extends Vue {
 
-	appearance: Appearance = getAppearance();
+	appearance: Appearance              = getAppearance();
 	private _unsub: (() => void) | null = null;
 
 	mounted() {

@@ -62,7 +62,9 @@ export function setDiffTabSize(value: number): DiffTabSize {
 }
 
 export function dispatchDiffSettingsChanged(): void {
-	window.dispatchEvent(new CustomEvent(DIFF_SETTINGS_EVENT, { detail : { diffFontSize : getDiffFontSize(), tabSize : getDiffTabSize() } }));
+	window.dispatchEvent(new CustomEvent(DIFF_SETTINGS_EVENT, {
+		detail : { diffFontSize : getDiffFontSize(), tabSize : getDiffTabSize() },
+	}));
 }
 
 export function subscribeDiffSettings(cb: () => void): () => void {

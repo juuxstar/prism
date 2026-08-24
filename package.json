@@ -34,7 +34,7 @@
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
-		"@frontlobby/eslint-config-lcb": "github:frontlobby/eslint-config-lcb#7.0.4",
+		"@frontlobby/eslint-config-lcb": "github:frontlobby/eslint-config-lcb#9.1.5",
 		"@types/dompurify": "^3.0.5",
 		"@types/express": "^5",
 		"@types/node": "^22",

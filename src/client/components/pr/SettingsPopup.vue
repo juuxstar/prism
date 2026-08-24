@@ -53,8 +53,12 @@
 <script lang="ts">
 import type { Appearance, ResolvedScheme } from '@/lib/theme/colorScheme';
 import { getAppearance, getResolvedScheme, setAppearance, subscribeColorScheme } from '@/lib/theme/colorScheme';
-import { DIFF_FONT_SIZE_PRESETS, DIFF_TAB_SIZE_PRESETS, getDiffFontSize, getDiffTabSize, setDiffFontSize, setDiffTabSize, subscribeDiffSettings } from '@/lib/theme/diffSettings';
-import { getStoredHljsThemeId, type HljsThemeOption, hljsThemesForResolvedScheme, loadHljsTheme, setStoredHljsThemeId }                           from '@/lib/theme/hljsTheme';
+import {
+	DIFF_FONT_SIZE_PRESETS, DIFF_TAB_SIZE_PRESETS, getDiffFontSize, getDiffTabSize, setDiffFontSize, setDiffTabSize, subscribeDiffSettings
+} from '@/lib/theme/diffSettings';
+import {
+	getStoredHljsThemeId, type HljsThemeOption, hljsThemesForResolvedScheme, loadHljsTheme, setStoredHljsThemeId
+} from '@/lib/theme/hljsTheme';
 
 import { Component, Prop, Vue } from 'vue-facing-decorator';
 
@@ -64,20 +68,20 @@ export default class SettingsPopup extends Vue {
 
 	@Prop({ required : true }) readonly user!: { login: string; avatar_url?: string } | null;
 
-	open = false;
-	appearance: Appearance = getAppearance();
+	open                           = false;
+	appearance: Appearance         = getAppearance();
 	resolvedScheme: ResolvedScheme = getResolvedScheme();
-	hljsTheme = getStoredHljsThemeId(getResolvedScheme());
-	diffFontSize: number = getDiffFontSize();
-	tabSize: number = getDiffTabSize();
+	hljsTheme                      = getStoredHljsThemeId(getResolvedScheme());
+	diffFontSize: number           = getDiffFontSize();
+	tabSize: number                = getDiffTabSize();
 
 	readonly diffFontSizePresets = DIFF_FONT_SIZE_PRESETS;
-	readonly tabSizePresets = DIFF_TAB_SIZE_PRESETS;
+	readonly tabSizePresets      = DIFF_TAB_SIZE_PRESETS;
 
-	private _unsubColorScheme: (() => void) | null = null;
-	private _unsubDiffSettings: (() => void) | null = null;
+	private _unsubColorScheme: (() => void) | null                 = null;
+	private _unsubDiffSettings: (() => void) | null                = null;
 	private _onDocumentClick: ((event: MouseEvent) => void) | null = null;
-	private _onKeydown: ((event: KeyboardEvent) => void) | null = null;
+	private _onKeydown: ((event: KeyboardEvent) => void) | null    = null;
 
 	get hljsThemesFiltered(): HljsThemeOption[] {
 		return hljsThemesForResolvedScheme(this.resolvedScheme);

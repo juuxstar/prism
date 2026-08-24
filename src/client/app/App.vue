@@ -79,43 +79,39 @@ const CHECKS_POLL_BASE_MS = 30 * 1000;
 const CHECKS_POLL_MAX_MS  = 5 * 60 * 1000;
 
 /** Dashboard root — manages auth, data fetching, polling, and screen navigation. */
-@Component({
-	components : {
-		PrDetailView,
-	},
-})
+@Component({ components : { PrDetailView } })
 export default class App extends Vue {
 
-	currentScreen = 'auth';
-	currentTypeFilter = 'ready';
-	currentRepo = localStorage.getItem('selectedRepo') || '';
-	selectedTeam = [ 'alpha', 'beta', 'gamma' ].includes(localStorage.getItem('selectedTeam')!) ? localStorage.getItem('selectedTeam')! : 'alpha';
-	allPRs: any[] = [];
-	accessibleRepos: AccessibleRepo[] = [];
-	user: any = null;
-	errorMessage = '';
-	deviceCode = '';
-	deviceUrl = '';
-	rateLimitVisible = false;
-	rateLimitMessage = '';
-	githubStatusVisible     = false;
-	githubStatusMessage     = '';
+	currentScreen                              = 'auth';
+	currentTypeFilter                          = 'ready';
+	currentRepo                                = localStorage.getItem('selectedRepo') || '';
+	selectedTeam                               = [ 'alpha', 'beta', 'gamma' ].includes(localStorage.getItem('selectedTeam')!) ? localStorage.getItem('selectedTeam')! : 'alpha';
+	allPRs: any[]                              = [];
+	accessibleRepos: AccessibleRepo[]          = [];
+	user: any                                  = null;
+	errorMessage                               = '';
+	deviceCode                                 = '';
+	deviceUrl                                  = '';
+	rateLimitVisible                           = false;
+	rateLimitMessage                           = '';
+	githubStatusVisible                        = false;
+	githubStatusMessage                        = '';
 	githubStatusLevel: GithubStatusBannerLevel = 'warning';
-	branches: any[] = [];
-	refreshing = false;
-	loginDisabled = false;
-	dataVersion = 0;
-	selectedOverlayPr: OverlayPr | null = null;
+	branches: any[]                           = [];
+	refreshing                                = false;
+	loginDisabled                             = false;
+	dataVersion                               = 0;
+	selectedOverlayPr: OverlayPr | null       = null;
 	checkoutStatus: GitWorkspaceStatus | null = null;
-	checkoutStatusLoading = false;
-	worktreePRs: any[] = [];
+	checkoutStatusLoading                     = false;
+	worktreePRs: any[]                        = [];
 
 	private _rateLimitTimer: ReturnType<typeof setTimeout> | null = null;
-	private _checksTimer: ReturnType<typeof setTimeout> | null = null;
+	private _checksTimer: ReturnType<typeof setTimeout> | null    = null;
 	private _checksPollDelay = CHECKS_POLL_BASE_MS;
 	private _githubStatusTimer: ReturnType<typeof setInterval> | null = null;
-	private _githubStatusDismissedFingerprint: string | null   = null;
-	private _lastGithubStatusFingerprint: string              = '';
+	private _githubStatusDismissedFingerprint: string | null          = null;
+	private _lastGithubStatusFingerprint: string                      = '';
 	get repos(): string[] {
 		const set = new Set<string>();
 		this.accessibleRepos.forEach(repo => {
@@ -437,10 +433,7 @@ export default class App extends Vue {
 			if (checks.pending > 0) {
 				return true;
 			}
-			if (this.isMergeLabeled(pr) && (checks.failed > 0 || checks.pending > 0)) {
-				return true;
-			}
-			return false;
+			return this.isMergeLabeled(pr) && (checks.failed > 0 || checks.pending > 0) ? true : false;
 		});
 	}
 

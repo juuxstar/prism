@@ -120,12 +120,8 @@ async function postGitJson<T>(url: string, body: unknown, withAuth = false): Pro
 			headers.set('Authorization', `Bearer ${token}`);
 		}
 	}
-	const response = await fetch(url, {
-		method : 'POST',
-		headers,
-		body   : JSON.stringify(body),
-	});
-	const json = await response.json().catch(() => ({}) as any);
+	const response = await fetch(url, { method : 'POST', headers, body : JSON.stringify(body) });
+	const json     = await response.json().catch(() => ({}) as any);
 	if (!response.ok) {
 		throw new Error(typeof json.error === 'string' ? json.error : `Git request failed: ${response.status}`);
 	}

@@ -41,10 +41,7 @@ function isPendingComment(x: unknown): x is PendingComment {
 	if (typeof x.commentType !== 'string' || !COMMENT_TYPES.has(x.commentType)) {
 		return false;
 	}
-	if (typeof x.lineContent !== 'string') {
-		return false;
-	}
-	return true;
+	return typeof x.lineContent !== 'string' ? false : true;
 }
 
 /** Returns stored comments if valid and head SHA matches; otherwise null (stale entries are removed). */
@@ -145,11 +142,7 @@ export function savePendingReview(owner: string, repo: string, number: number, h
 		}
 		localStorage.setItem(
 			key,
-			JSON.stringify({
-				v : FORMAT_VERSION,
-				headSha,
-				comments,
-			})
+			JSON.stringify({ v : FORMAT_VERSION, headSha, comments })
 		);
 	}
 	catch {

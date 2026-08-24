@@ -51,11 +51,7 @@ const distDir          = resolve(moduleDir, '..', '..', 'dist');
 let viteProxy: ReturnType<typeof createProxyMiddleware> | undefined;
 
 if (isDev) {
-	viteProxy = createProxyMiddleware({
-		target       : viteDevServerUrl,
-		changeOrigin : true,
-		ws           : true,
-	});
+	viteProxy = createProxyMiddleware({ target : viteDevServerUrl, changeOrigin : true, ws : true });
 	app.use(viteProxy);
 }
 else if (existsSync(distDir)) {
