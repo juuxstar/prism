@@ -42,7 +42,7 @@
 
 			<div v-if="contentLoading" class="pr-diff-content-loading"><span class="async-loader"></span> Loading file contents...</div>
 
-			<div v-else-if="hasMediaContent" class="pr-diff-viewer" :class="{ 'pr-diff-viewer-split': !isAddedOrRemoved }">
+			<div v-else-if="hasMediaContent" class="pr-diff-viewer" :class="{ 'pr-diff-viewer-split' : !isAddedOrRemoved }">
 				<pr-media-viewer
 					:split="!isAddedOrRemoved"
 					:left-src="baseMediaUrl"
@@ -201,7 +201,7 @@ import { buildConnectorPaths, buildScrollSegmentsFromState, maxVirtualScrollTop,
 import { buildSplitLinesForFile, parsePatch } from '@/lib/diff/diffLineBuilder';
 import { computeCommonBlocks }                from '@/lib/diff/patchDiff';
 import type { CommentThread, DiffLine, ScrollSegment } from '@/lib/diff/prDiffTypes';
-import { renderGithubMarkdown }              from '@/lib/githubMarkdown';
+import { renderGithubMarkdown }               from '@/lib/githubMarkdown';
 import { base64ToDataUrl, isRenderableMediaPaths, mediaMimeType } from '@/lib/mediaFiles';
 
 import { Component, Prop, Vue, Watch } from 'vue-facing-decorator';
@@ -636,6 +636,9 @@ export default class PrFilesTab extends Vue {
 				this.resetPanelScroll();
 			});
 		}
+		if (!val) {
+			this.scheduleFirstChangeReveal(this.currentFile, this._loadId);
+		}
 	}
 
 	@Watch('threadFocusRequest', { immediate : true })
@@ -761,10 +764,10 @@ export default class PrFilesTab extends Vue {
 				break;
 			}
 			if (delta < -0.5) {
-				lo = mid + 1e-6;
+				hi = mid - 1e-6;
 			}
 			else {
-				hi = mid - 1e-6;
+				lo = mid + 1e-6;
 			}
 		}
 		this.applyVirtualScroll();
@@ -869,6 +872,7 @@ export default class PrFilesTab extends Vue {
 			return;
 		}
 
+		const loadId   = ++this._loadId;
 		const cacheKey = file.filename;
 		const cached   = this._contentCache.get(cacheKey);
 		if (cached) {
@@ -880,18 +884,18 @@ export default class PrFilesTab extends Vue {
 				this.measureViewportHeight();
 				this.resetPanelScroll();
 			});
+			this.scheduleFirstChangeReveal(file, loadId);
 			return;
 		}
 
-		const loadId         = ++this._loadId;
 		this.contentLoading  = true;
 		this.baseContent     = null;
 		this.headContent     = null;
 		this.contentEncoding = 'text';
 
 		try {
-			let base: string | null     = null;
-			let head: string | null     = null;
+			let base: string | null         = null;
+			let head: string | null         = null;
 			let encoding: 'text' | 'base64' = 'text';
 
 			if (this.fileContentLoader) {
@@ -972,8 +976,53 @@ export default class PrFilesTab extends Vue {
 		this.rightScrollTop   = 0;
 	}
 
+	private scheduleFirstChangeReveal(file: PRFile, loadId: number): void {
+		const token = ++this._firstChangeRevealToken;
+		void this.revealFirstChangeAfterLoad(file, loadId, token);
+	}
+
+	private async revealFirstChangeAfterLoad(file: PRFile, loadId: number, token: number): Promise<void> {
+		await this.settleDiffLayout();
+		if (token !== this._firstChangeRevealToken || loadId !== this._loadId || file.filename !== this.currentFile?.filename || this.threadFocusRequest) {
+			return;
+		}
+
+		const firstChange = this.firstChangedLine();
+		if (!firstChange) {
+			return;
+		}
+
+		if (this.hasFullContent && !this.isAddedOrRemoved && this.viewportHeight > 10
+			&& maxVirtualScrollTop(this.scrollSegments(), this.viewportHeight, this.lineHeight) > 0) {
+			await this.scrollVirtToSplitLine(firstChange.side, firstChange.line);
+			return;
+		}
+
+		this.revealLineInViewer(firstChange.side, firstChange.line);
+	}
+
+	private firstChangedLine(): { side: 'LEFT' | 'RIGHT'; line: number } | null {
+		if (this.isAddedOrRemoved) {
+			const side = this.singlePanelSide;
+			const line = this.linesForSide(side).find(item => item.num !== null)?.num;
+			return line === undefined || line === null ? null : { side, line };
+		}
+
+		const patch      = this.parsedPatch;
+		const leftIndex  = patch.left.findIndex(item => item.type === 'del');
+		const rightIndex = patch.right.findIndex(item => item.type === 'add');
+		if (leftIndex === -1 && rightIndex === -1) {
+			return null;
+		}
+
+		const side = rightIndex === -1 || (leftIndex !== -1 && leftIndex < rightIndex) ? 'LEFT' : 'RIGHT';
+		const line = (side === 'LEFT' ? patch.left[leftIndex] : patch.right[rightIndex]).num;
+		return line === null ? null : { side, line };
+	}
+
 	private _debugLogged = false;
 	private _focusRequestToken = 0;
+	private _firstChangeRevealToken = 0;
 
 	applyVirtualScroll() {
 		const segments        = this.scrollSegments();

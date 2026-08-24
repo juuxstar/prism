@@ -10,6 +10,7 @@
 			<div class="type-filters u-flex u-items-center u-gap-0-5 u-ml-4 u-p-0-5">
 				<button class="type-filter-btn" :class="{ active : currentTypeFilter === 'ready' }" @click="$emit('set-type-filter', 'ready')">Ready</button>
 				<button class="type-filter-btn" :class="{ active : currentTypeFilter === 'draft' }" @click="$emit('set-type-filter', 'draft')">Draft</button>
+				<button class="type-filter-btn" :class="{ active : currentTypeFilter === 'worktrees' }" @click="$emit('set-type-filter', 'worktrees')">Worktrees</button>
 			</div>
 			<button
 				v-if="user"

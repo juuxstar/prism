@@ -33,11 +33,14 @@
 		:branches="branches"
 		:user="user"
 		:checkout-status="checkoutStatus"
+		:checkout-status-loading="checkoutStatusLoading"
+		:worktree-prs="worktreePRs"
 		@create-pr="handleCreatePR"
 		@api-error="handleBoardApiError"
 		@show-error="showError"
 		@prs-changed="handlePRsChanged"
 		@open-pr="openPrOverlay"
+		@checkout-status-changed="updateCheckoutStatus"
 	/>
 	<error-screen v-if="currentScreen === 'error'" :message="errorMessage" @retry="handleRetry" />
 	<Transition name="pr-detail-slide">
@@ -59,7 +62,7 @@
 <script lang="ts">
 import { cancelPolling, clearToken, getStoredToken, pollForToken, startDeviceFlow, storeToken } from '@/lib/api/auth';
 import type { GitWorkspaceStatus }       from '@/lib/api/gitCheckoutClient';
-import { fetchGitWorkspaceStatus }       from '@/lib/api/gitCheckoutClient';
+import { checkoutMatchesPullRequest, fetchGitWorkspaceStatus } from '@/lib/api/gitCheckoutClient';
 import type { AccessibleRepo, ApiError } from '@/lib/api/githubClient';
 import GitHubClient                      from '@/lib/api/githubClient';
 import { fetchGithubDashboardStatus, type GithubStatusBannerLevel }                             from '@/lib/githubStatus';
@@ -69,6 +72,11 @@ import { Component, Vue, Watch } from 'vue-facing-decorator';
 
 interface OverlayPr { owner: string; repo: string; number: number }
 const PrDetailView = defineAsyncComponent(() => import('@/components/screens/PrDetailView.vue'));
+
+// Check state is the only thing that moves while a board sits open. It is polled as one batched request that
+// backs off while nothing changes, so a long CI queue cannot drain the hourly GraphQL budget on its own.
+const CHECKS_POLL_BASE_MS = 30 * 1000;
+const CHECKS_POLL_MAX_MS  = 5 * 60 * 1000;
 
 /** Dashboard root — manages auth, data fetching, polling, and screen navigation. */
 @Component({
@@ -99,9 +107,12 @@ export default class App extends Vue {
 	dataVersion = 0;
 	selectedOverlayPr: OverlayPr | null = null;
 	checkoutStatus: GitWorkspaceStatus | null = null;
+	checkoutStatusLoading = false;
+	worktreePRs: any[] = [];
 
 	private _rateLimitTimer: ReturnType<typeof setTimeout> | null = null;
-	private _checksTimer: ReturnType<typeof setInterval> | null = null;
+	private _checksTimer: ReturnType<typeof setTimeout> | null = null;
+	private _checksPollDelay = CHECKS_POLL_BASE_MS;
 	private _githubStatusTimer: ReturnType<typeof setInterval> | null = null;
 	private _githubStatusDismissedFingerprint: string | null   = null;
 	private _lastGithubStatusFingerprint: string              = '';
@@ -132,11 +143,20 @@ export default class App extends Vue {
 		}
 	}
 
+	@Watch('currentTypeFilter')
+	onTypeFilterChange() {
+		// Switching to Draft or Worktrees reveals data that was not worth fetching under the previous filter.
+		if (this.currentScreen === 'pr') {
+			this.fetchAsyncData();
+		}
+	}
+
 	mounted() {
 		this.init();
 	}
 
 	beforeUnmount() {
+		this.stopChecksPolling();
 		this.stopGithubStatusPolling();
 	}
 
@@ -369,32 +389,31 @@ export default class App extends Vue {
 		await GitHubClient.fetchUserFirstNames(logins);
 	}
 
+	/**
+	 * The PRs whose cards the current filter actually renders. Per-card GitHub data is only worth fetching for
+	 * these: the Ready board hides drafts, the Draft board shows nothing else, and the Worktrees panel matches
+	 * against non-draft PRs.
+	 */
 	getVisiblePRs(): any[] {
-		if (!this.currentRepo) {
-			return this.allPRs;
-		}
+		const wantDrafts = this.currentTypeFilter === 'draft';
 		return this.allPRs.filter(pr => {
+			if (Boolean(pr.draft) !== wantDrafts) {
+				return false;
+			}
+			if (!this.currentRepo) {
+				return true;
+			}
 			const m = pr.repository_url.match(/repos\/([^/]+\/[^/]+)/);
 			return m && m[1] === this.currentRepo;
 		});
 	}
 
 	fetchAsyncData() {
-		const prs = this.getVisiblePRs();
-		GitHubClient.fetchBotCommentCounts(prs)
+		GitHubClient.fetchPrCardData(this.getVisiblePRs())
 			.then(() => {
 				this.dataVersion++;
-			})
-			.catch(e => this.handleAsyncError(e));
-		GitHubClient.fetchPRStats(prs)
-			.then(() => {
-				this.dataVersion++;
-				this.refreshCheckoutStatus();
-			})
-			.catch(e => this.handleAsyncError(e));
-		GitHubClient.fetchChecks(prs)
-			.then(() => {
-				this.dataVersion++;
+				// Card data backfills head/base refs, which worktree-to-PR matching needs.
+				void this.refreshWorktreePullRequests();
 				if (this.getPRsNeedingCheckRefresh().length > 0) {
 					this.startChecksPolling();
 				}
@@ -427,45 +446,95 @@ export default class App extends Vue {
 
 	startChecksPolling() {
 		this.stopChecksPolling();
-		this._checksTimer = setInterval(() => {
-			const needRefresh = this.getPRsNeedingCheckRefresh();
-			if (needRefresh.length === 0) {
-				this.stopChecksPolling();
+		this._checksPollDelay = CHECKS_POLL_BASE_MS;
+		this.scheduleChecksPoll();
+	}
+
+	private scheduleChecksPoll() {
+		this._checksTimer = setTimeout(() => {
+			void this.pollChecks();
+		}, this._checksPollDelay);
+	}
+
+	private async pollChecks() {
+		this._checksTimer = null;
+		const needRefresh = this.getPRsNeedingCheckRefresh();
+		if (needRefresh.length === 0) {
+			return;
+		}
+
+		try {
+			const changed = await GitHubClient.refreshChecks(needRefresh);
+			this.dataVersion++;
+			this._checksPollDelay = changed ? CHECKS_POLL_BASE_MS : Math.min(this._checksPollDelay * 2, CHECKS_POLL_MAX_MS);
+		}
+		catch (error: any) {
+			this.handleAsyncError(error);
+			if (error.rateLimitReset) {
 				return;
 			}
-			needRefresh.forEach(pr => GitHubClient.clearChecksCacheFor(pr.id));
-			GitHubClient.fetchChecks(needRefresh)
-				.then(() => {
-					this.dataVersion++;
-					if (this.getPRsNeedingCheckRefresh().length === 0) {
-						this.stopChecksPolling();
-					}
-				})
-				.catch((error: any) => {
-					this.handleAsyncError(error);
-					if (error.rateLimitReset) {
-						this.stopChecksPolling();
-					}
-				});
-		}, 10000);
+			this._checksPollDelay = Math.min(this._checksPollDelay * 2, CHECKS_POLL_MAX_MS);
+		}
+
+		if (this.getPRsNeedingCheckRefresh().length > 0) {
+			this.scheduleChecksPoll();
+		}
 	}
 
 	stopChecksPolling() {
 		if (this._checksTimer) {
-			clearInterval(this._checksTimer);
+			clearTimeout(this._checksTimer);
 			this._checksTimer = null;
 		}
 	}
 
+	/** Local git state, read from this app's own server — no GitHub quota involved. */
 	async refreshCheckoutStatus() {
+		this.checkoutStatusLoading = true;
 		try {
 			this.checkoutStatus = await fetchGitWorkspaceStatus();
+			await this.refreshWorktreePullRequests();
 		}
 		catch {
 			this.checkoutStatus = null;
+			this.worktreePRs    = [];
 		}
 		finally {
+			this.checkoutStatusLoading = false;
 			this.dataVersion++;
+		}
+	}
+
+	updateCheckoutStatus(status: GitWorkspaceStatus): void {
+		this.checkoutStatus = status;
+		void this.refreshWorktreePullRequests();
+	}
+
+	/**
+	 * Resolve pull requests for local worktrees whose branch no PR on the board already accounts for — usually
+	 * because the PR is closed or merged. This is the only search-API work the dashboard does outside the PR
+	 * listing itself, and the search quota is a separate 30-per-minute budget, so it stays idle until the
+	 * Worktrees panel is actually open.
+	 */
+	private async refreshWorktreePullRequests(): Promise<void> {
+		const checkouts = this.checkoutStatus?.checkouts || [];
+		if (this.currentTypeFilter !== 'worktrees' || !checkouts.length) {
+			this.worktreePRs = [];
+			return;
+		}
+
+		const unmatched = checkouts.filter(checkout => !this.allPRs.some(pr => checkoutMatchesPullRequest(checkout, pr)));
+		if (!unmatched.length) {
+			this.worktreePRs = [];
+			return;
+		}
+
+		try {
+			this.worktreePRs = await GitHubClient.fetchWorktreePullRequests(unmatched);
+		}
+		catch (error) {
+			this.worktreePRs = [];
+			this.handleAsyncError(error);
 		}
 	}
 

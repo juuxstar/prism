@@ -11,9 +11,9 @@ export class GitApi extends DecoratedRouter {
 
 	constructor(workspaceDir: string, checkoutHostDir?: string) {
 		super();
-		this.workspaceDir     = workspaceDir;
-		this.checkoutHostDir  = checkoutHostDir;
-		this.gitService       = new GitService(workspaceDir, undefined, checkoutHostDir);
+		this.workspaceDir    = workspaceDir;
+		this.checkoutHostDir = checkoutHostDir;
+		this.gitService      = new GitService(workspaceDir, undefined, checkoutHostDir);
 	}
 
 	@Get('/status')
@@ -25,6 +25,16 @@ export class GitApi extends DecoratedRouter {
 	@Post('/checkout')
 	async checkout(req: Request, res: Response) {
 		res.json(await this.authorizedGitService(req.headers.authorization).checkoutPullRequestBranch(req.body?.pr || {}, req.body?.worktreePath));
+	}
+
+	@Post('/reset-worktree')
+	async resetWorktree(req: Request, res: Response) {
+		res.json(await this.authorizedGitService(req.headers.authorization).resetWorktreeToNaturalBranch(req.body?.worktreePath));
+	}
+
+	@Post('/pull-worktree')
+	async pullWorktree(req: Request, res: Response) {
+		res.json(await this.authorizedGitService(req.headers.authorization).pullWorktreeBranch(req.body?.worktreePath));
 	}
 
 	@Post('/local-files')
@@ -39,7 +49,7 @@ export class GitApi extends DecoratedRouter {
 
 	@Post('/local-status')
 	async localStatus(req: Request, res: Response) {
-		res.json(await this.gitService.fetchLocalPullRequestStatus(req.body?.pr || {}));
+		res.json(await this.authorizedGitService(req.headers.authorization).fetchLocalPullRequestStatus(req.body?.pr || {}));
 	}
 
 	@Post('/commit')

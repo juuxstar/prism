@@ -143,6 +143,7 @@ html[data-color-scheme="light"] {
 html,
 body {
 	height: 100%;
+	overscroll-behavior: none;
 }
 
 body {
@@ -163,7 +164,8 @@ body {
 #app {
 	display: flex;
 	flex-direction: column;
-	min-height: 100vh;
+	height: 100vh;
+	overflow: hidden;
 }
 
 /* Screens (shared by Auth, Device, Loading, Error, PrBoard) */

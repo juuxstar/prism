@@ -18,21 +18,24 @@ export class GitService {
 	private checkoutHostDir?: string;
 
 	constructor(workspaceDir: string, authorization?: unknown, checkoutHostDir?: string) {
-		this.workspaceDir     = workspaceDir;
-		this.authorization    = authorization;
-		this.checkoutHostDir  = checkoutHostDir?.trim() || undefined;
+		this.workspaceDir    = workspaceDir;
+		this.authorization   = authorization;
+		this.checkoutHostDir = checkoutHostDir?.trim() || undefined;
 	}
 
 	/** Strip internal checkout metadata before returning workspace status to the client. */
 	serializeGitWorkspaceStatus(status: GitWorkspaceStatus): GitWorkspaceStatus {
 		return {
 			...status,
-			checkouts : status.checkouts.map(checkout => ({
+			hostWorkspaceDir : this.checkoutHostDir,
+			checkouts        : status.checkouts.map(checkout => ({
 				path        : checkout.path,
 				hostPath    : this.checkoutHostDir ? mapToHostCheckoutPath(checkout.path, status.workspaceDir, this.checkoutHostDir) : undefined,
 				label       : checkout.label,
 				branch      : checkout.branch,
 				headSha     : checkout.headSha,
+				aheadCount  : checkout.aheadCount,
+				behindCount : checkout.behindCount,
 				dirty       : checkout.dirty,
 				remoteRepos : checkout.remoteRepos,
 				isMain      : checkout.isMain,
@@ -152,6 +155,53 @@ export class GitService {
 		};
 	}
 
+	/** Restore a worktree to its directory-named branch at the current origin/dev revision. */
+	async resetWorktreeToNaturalBranch(worktreePath: unknown): Promise<GitWorkspaceStatus> {
+		const status = await this.detectGitWorkspace();
+		if (status.mode !== 'worktree-parent') {
+			throw new BadRequestError('A worktree parent directory is required');
+		}
+
+		const requestedPath = typeof worktreePath === 'string' ? resolve(worktreePath) : '';
+		const checkout      = status.checkouts.find(item => item.path === requestedPath);
+		if (!checkout) {
+			throw new BadRequestError('Choose one of the detected worktree directories');
+		}
+
+		const env = gitEnv(checkout);
+		await runGit(checkout.path, [ 'check-ref-format', '--branch', checkout.label ], env);
+		await runGit(checkout.path, [ 'fetch', '--no-tags', 'origin', 'dev' ], gitEnvWithGithubAuth(checkout, this.authorization));
+		await runGit(checkout.path, [ 'rev-parse', '--verify', 'origin/dev^{commit}' ], env);
+
+		const branchRef = `refs/heads/${checkout.label}`;
+		if ((await tryRunGit(checkout.path, [ 'show-ref', '--verify', '--quiet', branchRef ], env)) === null) {
+			await runGit(checkout.path, [ 'checkout', '-B', checkout.label, 'origin/dev' ], env);
+		}
+		else {
+			await runGit(checkout.path, [ 'checkout', '--force', checkout.label ], env);
+			await runGit(checkout.path, [ 'reset', '--hard', 'origin/dev' ], env);
+		}
+
+		return this.serializeGitWorkspaceStatus(await this.detectGitWorkspace());
+	}
+
+	/** Fast-forward a worktree branch from its origin counterpart. */
+	async pullWorktreeBranch(worktreePath: unknown): Promise<GitWorkspaceStatus> {
+		const status = await this.detectGitWorkspace();
+		if (status.mode !== 'worktree-parent') {
+			throw new BadRequestError('A worktree parent directory is required');
+		}
+
+		const requestedPath = typeof worktreePath === 'string' ? resolve(worktreePath) : '';
+		const checkout      = status.checkouts.find(item => item.path === requestedPath);
+		if (!checkout || checkout.branch === 'HEAD') {
+			throw new BadRequestError('Choose a worktree on a named branch');
+		}
+
+		await runGit(checkout.path, [ 'pull', '--ff-only', 'origin', checkout.branch ], gitEnvWithGithubAuth(checkout, this.authorization));
+		return this.serializeGitWorkspaceStatus(await this.detectGitWorkspace());
+	}
+
 	/** Build a GitHub-style file list for current uncommitted local changes. */
 	async fetchLocalPullRequestFiles(rawTarget: CheckoutTarget): Promise<LocalPrFile[]> {
 		const { checkout, target } = await this.findCheckoutForTarget(rawTarget);
@@ -160,12 +210,13 @@ export class GitService {
 
 		const tracked = await listChangedTrackedFiles(checkout, 'HEAD', env);
 		const files   = await Promise.all(tracked.map(async file => {
-			const statsRaw       = await runGit(checkout.path, [ 'diff', '--numstat', 'HEAD', '--', file.filename ], env, { trim : false });
+			const diffPaths      = file.previous_filename ? [ file.previous_filename, file.filename ] : [ file.filename ];
+			const statsRaw       = await runGit(checkout.path, [ 'diff', '--find-renames', '--numstat', 'HEAD', '--', ...diffPaths ], env, { trim : false });
 			const firstStats     = statsRaw.split('\n').find(Boolean);
 			const [ adds, dels ] = firstStats?.split('\t') ?? [];
 			const additions      = parseInt(adds ?? '', 10);
 			const deletions      = parseInt(dels ?? '', 10);
-			const patchRaw       = await runGit(checkout.path, [ 'diff', '--find-renames', '--unified=3', 'HEAD', '--', file.filename ], env, { trim : false });
+			const patchRaw       = await runGit(checkout.path, [ 'diff', '--find-renames', '--unified=3', 'HEAD', '--', ...diffPaths ], env, { trim : false });
 			const hunkStart      = patchRaw.indexOf('@@');
 			const patch          = hunkStart < 0 ? undefined : patchRaw.slice(hunkStart).trimEnd();
 			return {
@@ -245,15 +296,15 @@ export class GitService {
 		return { base, head, encoding : 'text' };
 	}
 
-	/** Report whether the local checkout has uncommitted or unpushed changes. */
+	/** Report whether the local checkout has uncommitted changes or commits absent from the remote PR branch. */
 	async fetchLocalPullRequestStatus(rawTarget: CheckoutTarget): Promise<LocalPrStatus> {
 		const { checkout, target } = await this.findCheckoutForTarget(rawTarget);
 		const env                  = gitEnv(checkout);
+		const fetchEnv             = gitEnvWithGithubAuth(checkout, this.authorization);
 		await runGit(checkout.path, [ 'cat-file', '-e', `${target.headSha}^{commit}` ], env);
-		const [ dirtyRaw, aheadRaw ] = await Promise.all([
-			runGit(checkout.path, [ 'status', '--porcelain' ], env, { trim : false }),
-			runGit(checkout.path, [ 'rev-list', '--count', `${target.headSha}..HEAD` ], env),
-		]);
+		const dirtyRaw = await runGit(checkout.path, [ 'status', '--porcelain' ], env, { trim : false });
+		await runGit(checkout.path, [ 'fetch', '--no-tags', `https://github.com/${target.headRepo}.git`, `refs/heads/${target.headRef}` ], fetchEnv);
+		const aheadRaw   = await runGit(checkout.path, [ 'rev-list', '--count', 'FETCH_HEAD..HEAD' ], env);
 		const aheadCount = parseInt(aheadRaw, 10);
 		return {
 			hasLocalChanges    : dirtyRaw.trim().length > 0,
@@ -539,17 +590,33 @@ async function inspectCheckout(path: string, isMain: boolean, workspacePath: str
 				.filter((repo): repo is string => Boolean(repo))
 		),
 	];
+	const branch                      = branchRaw || 'HEAD';
+	const divergenceRaw               = branchRaw ? await tryRunGit(checkoutPath, [ 'rev-list', '--left-right', '--count', `origin/${branchRaw}...HEAD` ], env) : null;
+	const { aheadCount, behindCount } = parseDivergence(divergenceRaw);
 	return {
 		path     : checkoutPath,
 		label    : isMain ? 'main directory' : basename(checkoutPath),
-		branch   : branchRaw || 'HEAD',
+		branch,
 		headSha,
+		aheadCount,
+		behindCount,
 		dirty    : dirtyRaw.length > 0,
 		remoteRepos,
 		isMain,
 		gitDir   : env?.GIT_DIR,
 		workTree : env?.GIT_WORK_TREE,
 	};
+}
+
+function parseDivergence(raw: string | null): { aheadCount?: number; behindCount?: number } {
+	if (!raw) {
+		return {};
+	}
+	const [ behind, ahead ] = raw.split(/\s+/).map(value => parseInt(value, 10));
+	if (!Number.isFinite(ahead) || !Number.isFinite(behind)) {
+		return {};
+	}
+	return { aheadCount : ahead, behindCount : behind };
 }
 
 function matchesCheckout(checkout: GitCheckout, target: Required<CheckoutTarget>): boolean {
@@ -573,6 +640,8 @@ export interface GitCheckout {
 	label: string;
 	branch: string;
 	headSha: string;
+	aheadCount?: number;
+	behindCount?: number;
 	dirty: boolean;
 	remoteRepos: string[];
 	isMain: boolean;
@@ -582,6 +651,7 @@ export interface GitCheckout {
 
 export interface GitWorkspaceStatus {
 	workspaceDir: string;
+	hostWorkspaceDir?: string;
 	mode: 'none' | 'single' | 'worktree-parent';
 	checkouts: GitCheckout[];
 	error?: string;

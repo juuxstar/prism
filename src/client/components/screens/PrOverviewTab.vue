@@ -305,17 +305,6 @@
 										</button>
 										<div class="pr-detail-resolved-compact-actions u-inline-flex u-items-start u-gap-2 u-flex-shrink-0">
 											<button
-												v-if="item.thread.threadNodeId"
-												type="button"
-												class="pr-detail-compact-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-py-0-5 u-px-2-5 u-fs-11 u-fw-600 u-cursor-pointer"
-												:disabled="resolveTogglingThreadId === item.thread.id"
-												title="Mark this review thread as open again"
-												@click="toggleThreadResolved(item.thread)"
-											>
-												<span v-if="resolveTogglingThreadId === item.thread.id" class="async-loader"></span>
-												<template v-else>Unresolve</template>
-											</button>
-											<button
 												v-if="item.thread.line != null"
 												type="button"
 												class="pr-overview-reply-hit pr-detail-thread-file-link-mini pr-detail-compact-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-py-0-5 u-px-2-5 u-fs-11 u-fw-600 u-cursor-pointer"
@@ -329,7 +318,7 @@
 								</template>
 								<template v-else>
 									<div class="pr-detail-review-head">
-										<div v-if="item.thread.threadNodeId || item.thread.resolved" class="pr-detail-comment-card-top u-flex u-items-center u-justify-end u-gap-2 u-mb-1-5">
+										<div v-if="item.thread.resolved" class="pr-detail-comment-card-top u-flex u-items-center u-justify-end u-gap-2 u-mb-1-5">
 											<span class="pr-detail-comment-card-actions-tr u-inline-flex u-items-center u-gap-2 u-flex-shrink-0">
 												<button
 													v-if="item.thread.resolved"
@@ -337,19 +326,8 @@
 													class="pr-detail-compact-btn pr-detail-collapse-thread-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-py-0-5 u-px-2-5 u-fs-11 u-fw-600 u-cursor-pointer"
 													title="Show condensed view"
 													@click="collapseResolvedThread(item.thread.id)"
-												>
+											>
 													Less
-												</button>
-												<button
-													v-if="item.thread.threadNodeId"
-													type="button"
-													class="pr-detail-compact-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-py-0-5 u-px-2-5 u-fs-11 u-fw-600 u-cursor-pointer"
-													:disabled="resolveTogglingThreadId === item.thread.id"
-													:title="item.thread.resolved ? 'Mark this review thread as open again' : 'Mark this review thread as resolved'"
-													@click="toggleThreadResolved(item.thread)"
-												>
-													<span v-if="resolveTogglingThreadId === item.thread.id" class="async-loader"></span>
-													<template v-else>{{ item.thread.resolved ? "Unresolve" : "Resolve" }}</template>
 												</button>
 											</span>
 										</div>
@@ -378,13 +356,24 @@
 										</div>
 										<div class="markdown-body pr-detail-comment-body" v-html="markdownReview(c.body)"></div>
 									</div>
-									<div class="pr-detail-review-thread-reply-footer u-mt-2">
+									<div class="pr-detail-review-thread-reply-footer u-flex u-items-center u-justify-end u-gap-2 u-mt-2">
 										<button
 											type="button"
 											class="pr-overview-reply-hit pr-detail-compact-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-py-0-5 u-px-2-5 u-fs-11 u-fw-600 u-cursor-pointer"
 											@click.stop="openReviewReplyPopover(item.thread, $event)"
 										>
 											Reply
+										</button>
+										<button
+											v-if="item.thread.threadNodeId"
+											type="button"
+											class="pr-detail-compact-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-py-0-5 u-px-2-5 u-fs-11 u-fw-600 u-cursor-pointer"
+											:disabled="resolveTogglingThreadId === item.thread.id"
+											:title="item.thread.resolved ? 'Mark this review thread as open again' : 'Mark this review thread as resolved'"
+											@click="toggleThreadResolved(item.thread)"
+										>
+											<span v-if="resolveTogglingThreadId === item.thread.id" class="async-loader"></span>
+											<template v-else>{{ item.thread.resolved ? "Unresolve" : "Resolve" }}</template>
 										</button>
 									</div>
 								</template>
@@ -423,6 +412,17 @@
 									<span class="pr-detail-annotation-message">{{ ann.message }}</span>
 								</li>
 							</ul>
+							<div v-if="testFailureState(check)" class="pr-detail-test-failures u-flex u-flex-col u-gap-1-5 u-w-full">
+								<span v-if="testFailureState(check)?.loading" class="u-fs-12 u-text-secondary u-inline-flex u-items-center u-gap-1-5"><span class="async-loader"></span> Loading individual test failures...</span>
+								<ul v-else-if="testFailureState(check)?.failures.length" class="pr-detail-annotations u-list-none u-flex u-flex-col u-gap-1 u-w-full">
+									<li v-for="(failure, idx) in testFailureState(check)?.failures" :key="idx" class="pr-detail-annotation pr-detail-test-failure u-flex u-flex-col u-gap-0-5 u-py-1-5 u-px-2-5 u-fs-12">
+										<span v-if="failure.file" class="pr-detail-annotation-location">{{ failure.file }}<template v-if="failure.line">:{{ failure.line }}</template></span>
+										<span class="pr-detail-annotation-title">{{ failure.fullTitle }}</span>
+										<span class="pr-detail-annotation-message">{{ failure.message }}</span>
+										<pre v-if="failure.stack" class="pr-detail-test-failure-stack u-m-0">{{ failure.stack }}</pre>
+									</li>
+								</ul>
+							</div>
 						</li>
 					</ul>
 					<p v-else class="pr-detail-empty u-flex-shrink-0 u-fs-13 u-text-tertiary">No checks found</p>
@@ -452,13 +452,13 @@
 </template>
 
 <script lang="ts">
-import type { GitCheckout, GitWorkspaceStatus, LocalPrStatus, PullRequestCheckoutState } from '@/lib/api/gitCheckoutClient';
+import type { GitCheckout, GitWorkspaceStatus, LocalPrStatus, PullRequestCheckoutState }             from '@/lib/api/gitCheckoutClient';
 import { checkoutStateForPr, checkoutTargetForPr } from '@/lib/api/gitCheckoutClient';
-import type { CheckAnnotation, CheckRunDetail, IssueComment, RepoLabel, ReviewComment }  from '@/lib/api/githubClient';
-import GitHubClient, { isPullRequestConflicted, stripCommentTypePrefix }                 from '@/lib/api/githubClient';
-import type { CommentThread }      from '@/lib/diff/prDiffTypes';
-import { renderGithubMarkdown }    from '@/lib/githubMarkdown';
-import { iconSvg }                 from '@/lib/icons';
+import type { CheckAnnotation, CheckRunDetail, IssueComment, RepoLabel, ReviewComment, TestFailure } from '@/lib/api/githubClient';
+import GitHubClient, { isPullRequestConflicted, stripCommentTypePrefix }                             from '@/lib/api/githubClient';
+import type { CommentThread }   from '@/lib/diff/prDiffTypes';
+import { renderGithubMarkdown } from '@/lib/githubMarkdown';
+import { iconSvg }              from '@/lib/icons';
 import { formatDuration, timeAgo, toCursorFileHref } from '@/lib/utils';
 
 import { Component, Prop, Vue, Watch } from 'vue-facing-decorator';
@@ -475,6 +475,11 @@ interface OverviewThread {
 }
 
 type OverviewRow = { kind: 'issue'; key: string; sortTime: number; comment: IssueComment } | { kind: 'review-thread'; key: string; sortTime: number; thread: OverviewThread };
+
+interface TestFailureState {
+	loading: boolean;
+	failures: TestFailure[];
+}
 
 @Component({ emits : [ 'add-label', 'remove-label', 'comments-updated', 'approve-pr', 'merge-pr', 'close-pr', 'toggle-draft', 'open-review-in-files', 'checkout-pr', 'commit-local-changes', 'push-local-changes' ] })
 export default class PrOverviewTab extends Vue {
@@ -511,6 +516,7 @@ export default class PrOverviewTab extends Vue {
 	labelSearch = '';
 	/** Root review comment id while a resolve/unresolve request is in flight */
 	resolveTogglingThreadId: number | null = null;
+	testFailureStates: Record<string, TestFailureState> = {};
 
 	/** Bumped every second while checks are in progress so elapsed times stay current. */
 	checkDurationTick = 0;
@@ -636,7 +642,8 @@ export default class PrOverviewTab extends Vue {
 	}
 
 	get pushLocalDisabled(): boolean {
-		return this.pushingLocalChanges || this.committingLocalChanges || !this.localPrStatus?.hasUnpushedCommits;
+		const aheadCount = this.localPrStatus?.aheadCount ?? 0;
+		return this.pushingLocalChanges || this.committingLocalChanges || aheadCount < 1;
 	}
 
 	get commitLocalTitle(): string {
@@ -647,9 +654,9 @@ export default class PrOverviewTab extends Vue {
 	}
 
 	get pushLocalTitle(): string {
-		if (this.localPrStatus?.hasUnpushedCommits) {
-			const count = this.localPrStatus.aheadCount;
-			return `Push ${count} committed change${count === 1 ? '' : 's'} to the pull request branch`;
+		const aheadCount = this.localPrStatus?.aheadCount ?? 0;
+		if (aheadCount > 0) {
+			return `Push ${aheadCount} committed change${aheadCount === 1 ? '' : 's'} to the pull request branch`;
 		}
 		return 'No committed changes to push';
 	}
@@ -980,6 +987,35 @@ export default class PrOverviewTab extends Vue {
 		else {
 			this.stopCheckDurationTimer();
 		}
+		for (const check of this.checks) {
+			if (this.isActionTestFailure(check) && !this.testFailureState(check)) {
+				void this.loadTestFailures(check);
+			}
+		}
+	}
+
+	testFailureState(check: CheckRunDetail): TestFailureState | undefined {
+		return this.testFailureStates[this.testFailureKey(check)];
+	}
+
+	isActionTestFailure(check: CheckRunDetail): boolean {
+		return this.isCheckFailed(check) && Boolean(check.url?.includes('/actions/runs/'));
+	}
+
+	async loadTestFailures(check: CheckRunDetail): Promise<void> {
+		const key              = this.testFailureKey(check);
+		this.testFailureStates = { ...this.testFailureStates, [key] : { loading : true, failures : [] } };
+		try {
+			const failures         = await GitHubClient.fetchTestFailures(this.owner, this.repo, check);
+			this.testFailureStates = { ...this.testFailureStates, [key] : { loading : false, failures } };
+		}
+		catch {
+			this.testFailureStates = { ...this.testFailureStates, [key] : { loading : false, failures : [] } };
+		}
+	}
+
+	testFailureKey(check: CheckRunDetail): string {
+		return check.url || check.name;
 	}
 
 	startCheckDurationTimer(): void {
@@ -1609,6 +1645,10 @@ html[data-color-scheme="light"] .pr-detail-overview .card > h2 {
 	color: var(--accent-blue);
 }
 
+.pr-detail-issue-reply-btn {
+	align-self: flex-start;
+}
+
 .pr-detail-comment-review .pr-detail-comment-meta .pr-detail-comment-badge {
 	background: var(--chip-purple-bg);
 	color: var(--accent-purple);
@@ -1705,6 +1745,11 @@ html[data-color-scheme="light"] .pr-detail-overview .card > h2 {
 	padding-left: 30px;
 }
 
+.pr-detail-test-failures {
+	margin-top: 6px;
+	padding-left: 30px;
+}
+
 .pr-detail-annotation {
 	background: var(--danger-row-bg);
 	border-left: 2px solid var(--accent-red);
@@ -1727,6 +1772,15 @@ html[data-color-scheme="light"] .pr-detail-overview .card > h2 {
 	white-space: pre-wrap;
 	word-break: break-word;
 	line-height: 1.4;
+}
+
+.pr-detail-test-failure-stack {
+	max-height: 220px;
+	overflow: auto;
+	color: var(--text-secondary);
+	font-size: 11px;
+	line-height: 1.4;
+	white-space: pre-wrap;
 }
 
 .pr-detail-stat-grid > * {

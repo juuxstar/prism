@@ -1,3 +1,49 @@
+// GraphQL field aliases let one request resolve many pull requests at once. 20 keeps a batch inside GitHub's
+// node-count budget while cutting the per-card request count by the same factor.
+const PR_CARD_BATCH_SIZE       = 20;
+const USER_NAME_BATCH_SIZE     = 50;
+const REVIEW_THREAD_LIMIT      = 50;
+const CHECK_CONTEXT_LIMIT      = 100;
+const RECENT_BRANCH_LIMIT      = 30;
+const WORKTREE_PR_DETAIL_LIMIT = 5;
+const PROTECTED_BRANCH_NAMES   = new Set([ 'dev', 'main', 'master' ]);
+const CURSOR_BOT               = /^cursor\b/i;
+
+const CHECK_ROLLUP_SELECTION = `
+	commits(last: 1) {
+		nodes { commit { statusCheckRollup { contexts(first: ${CHECK_CONTEXT_LIMIT}) {
+			nodes { ... on CheckRun { conclusion status } ... on StatusContext { state } }
+		} } } }
+	}
+`;
+
+/** Everything a board card renders, in one selection set: size stats, conflict state, checks and bot reviews. */
+const PR_CARD_FRAGMENT = `
+	fragment PrCardFields on PullRequest {
+		additions
+		deletions
+		changedFiles
+		mergeable
+		headRefName
+		headRefOid
+		headRepository { nameWithOwner }
+		baseRefName
+		baseRefOid
+		baseRepository { nameWithOwner }
+		reviewThreads(first: ${REVIEW_THREAD_LIMIT}) {
+			nodes { isResolved comments(first: 1) { nodes { author { login } body } } }
+		}
+		${CHECK_ROLLUP_SELECTION}
+	}
+`;
+
+/** Poll-sized subset of PR_CARD_FRAGMENT — check state is the only thing that moves while a board sits open. */
+const PR_CHECKS_FRAGMENT = `
+	fragment PrCardFields on PullRequest {
+		${CHECK_ROLLUP_SELECTION}
+	}
+`;
+
 class GitHubAPI {
 
 	private token: string | null = null;
@@ -9,6 +55,7 @@ class GitHubAPI {
 	private prStatsCache = new Map<number, PRStats>();
 	private checksCache = new Map<number, ChecksSummary>();
 	private prMergeabilityCache = new Map<number, PRMergeability>();
+	private worktreePrCache = new Map<string, any | null>();
 	private oauthScopes = new Set<string>();
 
 	setToken(t: string) {
@@ -46,13 +93,7 @@ class GitHubAPI {
 		this.prStatsCache.clear();
 		this.checksCache.clear();
 		this.prMergeabilityCache.clear();
-	}
-
-	clearChecksCache() {
-		this.checksCache.clear();
-	}
-	clearChecksCacheFor(prId: number) {
-		this.checksCache.delete(prId);
+		this.worktreePrCache.clear();
 	}
 
 	// ─── Core Fetch ───────────────────────────────────────
@@ -104,7 +145,20 @@ class GitHubAPI {
 		return response.json();
 	}
 
-	private async graphql(query: string, variables: Record<string, any> = {}): Promise<any> {
+	private async apiFetchArrayBuffer(endpoint: string): Promise<ArrayBuffer> {
+		const response = await fetch(`${this.apiBase}${endpoint}`, {
+			headers : {
+				Authorization : this.getAuthHeader(),
+				Accept        : 'application/vnd.github.v3+json',
+			},
+		});
+		if (!response.ok) {
+			throw apiError(`GitHub API error: ${response.status}`, { status : response.status });
+		}
+		return response.arrayBuffer();
+	}
+
+	private async graphql(query: string, variables: Record<string, any> = {}, options: { allowPartial?: boolean } = {}): Promise<any> {
 		const response = await fetch(this.graphqlUrl, {
 			method  : 'POST',
 			headers : {
@@ -147,7 +201,11 @@ class GitHubAPI {
 				const resetTime = rateLimitResetFromHeaders(resetHeader, retryAfter);
 				throw apiError('GitHub API rate limit exceeded', { rateLimitReset : resetTime });
 			}
-			throw apiError(msg);
+			// Batched queries alias many independent lookups into one request, so a single unreadable repository
+			// or missing account must not discard the rest of the batch alongside it.
+			if (!(options.allowPartial && json.data)) {
+				throw apiError(msg);
+			}
 		}
 		return json.data;
 	}
@@ -256,118 +314,167 @@ class GitHubAPI {
 		return items;
 	}
 
-	async fetchBotCommentCounts(prs: any[]) {
-		const CURSOR_BOT       = /^cursor\b/i;
-		const toFetch          = prs.filter(pr => !this.botCommentCache.has(pr.id));
-		const batches: any[][] = [];
-		for (let i = 0; i < toFetch.length; i += 10) {
-			batches.push(toFetch.slice(i, i + 10));
+	/**
+	 * Find the pull request associated with each checked-out worktree branch. This runs against the search API,
+	 * whose 30-requests-per-minute budget is separate from (and far smaller than) the main REST allowance, so
+	 * the work is deliberately serialised rather than fanned out. Callers should pass only the checkouts they
+	 * could not already match against a loaded PR.
+	 */
+	async fetchWorktreePullRequests(checkouts: WorktreeCheckoutTarget[]): Promise<any[]> {
+		const pullRequests: any[] = [];
+		for (const checkout of checkouts) {
+			const pullRequest = await this.fetchWorktreePullRequest(checkout);
+			if (pullRequest) {
+				pullRequests.push(pullRequest);
+			}
+		}
+		return pullRequests;
+	}
+
+	private async fetchWorktreePullRequest(checkout: WorktreeCheckoutTarget): Promise<any | null> {
+		const branch = checkout.branch;
+		const repos  = [ ...new Set(checkout.remoteRepos.map(repo => repo.toLowerCase())) ];
+		if (!branch || branch === 'HEAD' || repos.length === 0) {
+			return null;
 		}
 
-		const QUERY = `
-			query($owner: String!, $repo: String!, $number: Int!) {
-				repository(owner: $owner, name: $repo) {
-				pullRequest(number: $number) {
-					reviewThreads(first: 100) {
-						nodes { isResolved comments(first: 1) { nodes { author { login } body } } } }
-					}
+		const cacheKey = `${repos.join(',')}:${branch}`;
+		if (this.worktreePrCache.has(cacheKey)) {
+			return this.worktreePrCache.get(cacheKey) || null;
+		}
+
+		// Omitting a `state:` qualifier matches open and closed PRs in one query rather than two.
+		const queries           = repos.flatMap(baseRepo => repos.map(headRepo => `type:pr repo:${baseRepo} head:${headRepo.split('/')[0]}:${branch}`));
+		const candidates: any[] = [];
+		for (const query of queries) {
+			const items = await this.searchPRs(query).catch(() => [] as any[]);
+			for (const pr of items) {
+				if (!candidates.some(candidate => candidate.id === pr.id)) {
+					candidates.push(pr);
 				}
 			}
-		`;
+		}
+		candidates.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
 
-		for (const batch of batches) {
-			const results = await Promise.all(
-				batch.map(async pr => {
-					const [ owner, repo ] = pr.repository_url.match(/repos\/([^/]+)\/([^/]+)/)!.slice(1);
-					try {
-						const data              = await this.graphql(QUERY, { owner, repo, number : pr.number });
-						const threads           = data.repository.pullRequest.reviewThreads.nodes || [];
-						const counts: BotCounts = { low : 0, medium : 0, high : 0 };
-						for (const t of threads) {
-							if (t.isResolved || !t.comments.nodes.length) {
-								continue;
-							}
-							const comment = t.comments.nodes[0];
-							if (!CURSOR_BOT.test(comment.author?.login || '')) {
-								continue;
-							}
-							const severity = GitHubAPI.parseSeverity(comment.body);
-							counts[severity]++;
-						}
-						return { id : pr.id as number, counts };
-					}
-					catch (error: any) {
-						if (error.rateLimitReset || error.message?.includes('rate limit')) {
-							throw error;
-						}
-						return { id : pr.id as number, counts : null };
-					}
-				})
-			);
-			for (const { id, counts } of results) {
-				if (counts !== null) {
-					this.botCommentCache.set(id, counts);
+		// The search already constrained `head:`, so the newest candidate is almost always the answer; confirm
+		// it with a detail read and only walk further if the head ref does not line up.
+		let pullRequest: any = null;
+		for (const candidate of candidates.slice(0, WORKTREE_PR_DETAIL_LIMIT)) {
+			const match = candidate.repository_url?.match(/repos\/([^/]+)\/([^/]+)/);
+			if (!match || !Number.isInteger(candidate.number)) {
+				continue;
+			}
+			const detail = await this.fetchPRDetail(match[1], match[2], candidate.number).catch(() => null);
+			if (detail?.head?.ref === branch) {
+				pullRequest = detail;
+				break;
+			}
+		}
+
+		this.worktreePrCache.set(cacheKey, pullRequest);
+		return pullRequest;
+	}
+
+	/**
+	 * Fetch everything a board card needs — size stats, mergeability, check rollup and unresolved bot review
+	 * counts — for a set of PRs. GraphQL field aliases let a single request cover PR_CARD_BATCH_SIZE pull
+	 * requests, so a board of N PRs costs ceil(N / PR_CARD_BATCH_SIZE) requests rather than the 3N REST and
+	 * GraphQL calls this replaces. Also backfills `head`/`base` on each PR, which search results omit.
+	 */
+	async fetchPrCardData(prs: any[]) {
+		const toFetch = prs.filter(pr => (
+			!this.prStatsCache.has(pr.id)
+			|| !this.checksCache.has(pr.id)
+			|| !this.botCommentCache.has(pr.id)
+			|| !pr.head
+			|| !pr.base
+		));
+
+		for (const batch of chunk(toFetch, PR_CARD_BATCH_SIZE)) {
+			const nodes = await this.fetchPullRequestNodes(batch, PR_CARD_FRAGMENT);
+			for (const { pr, node } of nodes) {
+				this.prStatsCache.set(pr.id, {
+					changedFiles : node.changedFiles ?? 0,
+					additions    : node.additions ?? 0,
+					deletions    : node.deletions ?? 0,
+				});
+				this.prMergeabilityCache.set(pr.id, mergeabilityFromGraphql(node.mergeable));
+				this.checksCache.set(pr.id, checksSummaryFromPullRequest(node));
+				this.botCommentCache.set(pr.id, botCountsFromReviewThreads(node.reviewThreads?.nodes));
+
+				const head = refDescriptor(node.headRepository, node.headRefName, node.headRefOid);
+				const base = refDescriptor(node.baseRepository, node.baseRefName, node.baseRefOid);
+				if (head) {
+					pr.head = head;
+				}
+				if (base) {
+					pr.base = base;
 				}
 			}
 		}
 	}
 
-	private static parseSeverity(body: string): keyof BotCounts {
-		if (!body) {
-			return 'medium';
+	/**
+	 * Re-read only the check rollup for the given PRs, bypassing the cache. Used by dashboard polling, which
+	 * needs a much cheaper query than the full card payload. Resolves to true when any summary actually moved,
+	 * so the caller can back its polling interval off while nothing is changing.
+	 */
+	async refreshChecks(prs: any[]): Promise<boolean> {
+		let changed = false;
+
+		for (const batch of chunk(prs, PR_CARD_BATCH_SIZE)) {
+			const nodes = await this.fetchPullRequestNodes(batch, PR_CHECKS_FRAGMENT);
+			for (const { pr, node } of nodes) {
+				const checks   = checksSummaryFromPullRequest(node);
+				const previous = this.checksCache.get(pr.id);
+				if (!previous || previous.passed !== checks.passed || previous.failed !== checks.failed || previous.pending !== checks.pending) {
+					changed = true;
+				}
+				this.checksCache.set(pr.id, checks);
+			}
 		}
-		const lower = body.toLowerCase();
-		if (/\bcritical\b/.test(lower) || /\bhigh\b/.test(lower) || /\berror\b/.test(lower) || /\bbug\b/.test(lower) || /severity:\s*high/i.test(body)) {
-			return 'high';
+
+		return changed;
+	}
+
+	/**
+	 * Resolve one batch of PRs through a single aliased GraphQL request. Partial responses are tolerated: a PR
+	 * whose repository is no longer readable drops out of the result instead of failing its whole batch.
+	 */
+	private async fetchPullRequestNodes(prs: any[], fragment: string): Promise<{ pr: any; node: any }[]> {
+		const targets = prs
+			.map(pr => ({ pr, ...parseRepositoryUrl(pr.repository_url) }))
+			.filter((target): target is { pr: any; owner: string; repo: string } => Boolean(target.owner && target.repo && Number.isInteger(target.pr.number)));
+		if (!targets.length) {
+			return [];
 		}
-		if (/\bsuggestion\b/.test(lower) || /\bnit\b/.test(lower) || /\bminor\b/.test(lower) || /\blow\b/.test(lower) || /severity:\s*low/i.test(body)) {
-			return 'low';
-		}
-		return 'medium';
+
+		const declarations: string[]         = [];
+		const selections: string[]           = [];
+		const variables: Record<string, any> = {};
+		targets.forEach((target, index) => {
+			declarations.push(`$owner${index}: String!, $repo${index}: String!, $number${index}: Int!`);
+			selections.push(`pr${index}: repository(owner: $owner${index}, name: $repo${index}) { pullRequest(number: $number${index}) { ...PrCardFields } }`);
+			variables[`owner${index}`]  = target.owner;
+			variables[`repo${index}`]   = target.repo;
+			variables[`number${index}`] = target.pr.number;
+		});
+
+		const query = `query(${declarations.join(', ')}) {\n${selections.join('\n')}\n}\n${fragment}`;
+		const data  = await this.graphql(query, variables, { allowPartial : true });
+
+		const resolved: { pr: any; node: any }[] = [];
+		targets.forEach((target, index) => {
+			const node = data?.[`pr${index}`]?.pullRequest;
+			if (node) {
+				resolved.push({ pr : target.pr, node });
+			}
+		});
+		return resolved;
 	}
 
 	getBotComments(prId: number): BotCounts | null {
 		return this.botCommentCache.get(prId) || null;
-	}
-
-	async fetchPRStats(prs: any[]) {
-		const toFetch          = prs.filter(pr => !this.prStatsCache.has(pr.id) || !pr.head || !pr.base);
-		const batches: any[][] = [];
-		for (let i = 0; i < toFetch.length; i += 10) {
-			batches.push(toFetch.slice(i, i + 10));
-		}
-
-		for (const batch of batches) {
-			const results = await Promise.all(
-				batch.map(async pr => {
-					const repo = pr.repository_url.match(/repos\/(.+)/)![1];
-					try {
-						const data = await this.apiFetch(`/repos/${repo}/pulls/${pr.number}`);
-						pr.head    = data.head;
-						pr.base    = data.base;
-						return {
-							id           : pr.id as number,
-							stats        : { changedFiles : data.changed_files, additions : data.additions, deletions : data.deletions } as PRStats,
-							mergeability : { mergeable : data.mergeable, mergeable_state : data.mergeable_state } as PRMergeability,
-						};
-					}
-					catch (error: any) {
-						if (error.rateLimitReset || error.message?.includes('rate limit')) {
-							throw error;
-						}
-						return { id : pr.id as number, stats : null, mergeability : null };
-					}
-				})
-			);
-			for (const { id, stats, mergeability } of results) {
-				if (stats !== null) {
-					this.prStatsCache.set(id, stats);
-				}
-				if (mergeability !== null) {
-					this.prMergeabilityCache.set(id, mergeability);
-				}
-			}
-		}
 	}
 
 	getPRStats(prId: number): PRStats | null {
@@ -378,106 +485,28 @@ class GitHubAPI {
 		return this.prMergeabilityCache.get(prId) || null;
 	}
 
-	async fetchChecks(prs: any[]) {
-		const toFetch          = prs.filter(pr => !this.checksCache.has(pr.id));
-		const batches: any[][] = [];
-		for (let i = 0; i < toFetch.length; i += 10) {
-			batches.push(toFetch.slice(i, i + 10));
-		}
-
-		const QUERY = `
-			query($owner: String!, $repo: String!, $number: Int!) {
-				repository(owner: $owner, name: $repo) {
-				pullRequest(number: $number) {
-					commits(last: 1) {
-					nodes { commit { statusCheckRollup { contexts(first: 100) {
-						nodes { ... on CheckRun { conclusion status } ... on StatusContext { state } }
-					} } } }
-					}
-				}
-				}
-			}
-		`;
-
-		for (const batch of batches) {
-			const results = await Promise.all(
-				batch.map(async pr => {
-					const [ owner, repo ] = pr.repository_url.match(/repos\/([^/]+)\/([^/]+)/)!.slice(1);
-					try {
-						const data    = await this.graphql(QUERY, { owner, repo, number : pr.number });
-						const commits = data.repository.pullRequest.commits.nodes;
-						if (!commits.length) {
-							return { id : pr.id as number, checks : { passed : 0, failed : 0, pending : 0 } };
-						}
-
-						const contexts = commits[0].commit.statusCheckRollup?.contexts?.nodes || [];
-						let passed     = 0,
-							failed = 0,
-							pending = 0;
-						for (const ctx of contexts) {
-							if (ctx.conclusion) {
-								if ([ 'SUCCESS', 'NEUTRAL', 'SKIPPED' ].includes(ctx.conclusion)) {
-									passed++;
-								}
-								else if ([ 'FAILURE', 'TIMED_OUT', 'CANCELLED' ].includes(ctx.conclusion)) {
-									failed++;
-								}
-								else {
-									pending++;
-								}
-							}
-							else if (ctx.state) {
-								if (ctx.state === 'SUCCESS') {
-									passed++;
-								}
-								else if (ctx.state === 'FAILURE' || ctx.state === 'ERROR') {
-									failed++;
-								}
-								else {
-									pending++;
-								}
-							}
-							else {
-								pending++;
-							}
-						}
-						return { id : pr.id as number, checks : { passed, failed, pending } };
-					}
-					catch (error: any) {
-						if (error.rateLimitReset || error.message?.includes('rate limit')) {
-							throw error;
-						}
-						return { id : pr.id as number, checks : null };
-					}
-				})
-			);
-			for (const { id, checks } of results) {
-				if (checks !== null) {
-					this.checksCache.set(id, checks);
-				}
-			}
-		}
-	}
-
 	getChecks(prId: number): ChecksSummary | null {
 		return this.checksCache.get(prId) || null;
 	}
 
+	/** Resolve display names for PR authors. One aliased GraphQL request replaces one REST call per login. */
 	async fetchUserFirstNames(logins: string[]) {
-		const unique              = [ ...new Set(logins) ].filter(l => !this.userNameCache.has(l));
-		const batches: string[][] = [];
-		for (let i = 0; i < unique.length; i += 10) {
-			batches.push(unique.slice(i, i + 10));
-		}
+		const unique = [ ...new Set(logins) ].filter(login => login && !this.userNameCache.has(login));
 
-		for (const batch of batches) {
-			const results = await Promise.all(batch.map(login => this.apiFetch(`/users/${login}`).catch(() => null)));
-			for (const profile of results) {
-				if (profile) {
-					const firstName = (profile.name || profile.login).split(/\s+/)[0];
-					this.userNameCache.set(profile.login, firstName);
-				}
-			}
+		for (const batch of chunk(unique, USER_NAME_BATCH_SIZE)) {
+			const declarations = batch.map((_login, index) => `$login${index}: String!`);
+			const selections   = batch.map((_login, index) => `user${index}: user(login: $login${index}) { login name }`);
+			const variables    = Object.fromEntries(batch.map((login, index) => [ `login${index}`, login ]));
+			const query        = `query(${declarations.join(', ')}) {\n${selections.join('\n')}\n}`;
+
+			// Bot accounts (`dependabot[bot]` and friends) are not Users and error out individually; a partial
+			// response still carries every real profile in the batch.
+			const data = await this.graphql(query, variables, { allowPartial : true }).catch(() => null);
+			batch.forEach((login, index) => {
+				const profile   = data?.[`user${index}`];
+				const firstName = ((profile?.name || profile?.login || login) as string).split(/\s+/)[0];
+				this.userNameCache.set(login, firstName);
+			});
 		}
 	}
 
@@ -503,36 +532,66 @@ class GitHubAPI {
 		}
 	}
 
-	async fetchRecentBranches(repo: string): Promise<BranchInfo[]> {
-		const branches   = await this.apiFetch(`/repos/${repo}/branches?per_page=100&sort=updated`);
-		const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+	/**
+	 * Branches pushed in the last hour that have no open PR yet — the candidates offered in the create-PR box.
+	 * A single GraphQL query returns each branch already ordered by commit date, with its commit message and the
+	 * repository's open PR head refs. The REST equivalent needed a branch listing, one commit read per branch
+	 * (up to 100) and a paginated PR listing; it also silently ignored `sort=updated`, which that endpoint does
+	 * not support, so it paid for 100 commit reads just to discover which branches were recent.
+	 */
+	async fetchBranchesWithoutPRs(repo: string): Promise<BranchInfo[]> {
+		const [ owner, name ] = repo.split('/');
+		if (!owner || !name) {
+			return [];
+		}
 
-		const withDates = await Promise.all(
-			branches.map(async (b: any) => {
-				try {
-					const commit  = await this.apiFetch(`/repos/${repo}/commits/${b.commit.sha}`);
-					const message = commit.commit.message.split('\n')[0];
-					return { name : b.name, date : new Date(commit.commit.committer.date), message };
+		const QUERY = `
+			query($owner: String!, $name: String!) {
+				repository(owner: $owner, name: $name) {
+					refs(refPrefix: "refs/heads/", orderBy: { field: TAG_COMMIT_DATE, direction: DESC }, first: ${RECENT_BRANCH_LIMIT}) {
+						nodes { name target { ... on Commit { committedDate messageHeadline } } }
+					}
+					pullRequests(states: OPEN, first: 100) {
+						nodes { headRefName headRepository { nameWithOwner } }
+					}
 				}
-				catch {
-					return null;
-				}
-			})
+			}
+		`;
+
+		const data       = await this.graphql(QUERY, { owner, name });
+		const repository = data?.repository;
+		const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+		const prHeads    = new Set(
+			(repository?.pullRequests?.nodes || [])
+				.filter((pr: any) => pr.headRepository?.nameWithOwner?.toLowerCase() === repo.toLowerCase())
+				.map((pr: any) => pr.headRefName as string)
 		);
 
-		return withDates
-			.filter((b): b is BranchInfo => b !== null && b.date >= oneHourAgo && b.name !== 'dev' && b.name !== 'main' && b.name !== 'master')
-			.sort((a, b) => b.date.getTime() - a.date.getTime());
+		return (repository?.refs?.nodes || [])
+			.map((ref: any) => ({
+				name    : ref.name as string,
+				date    : new Date(ref.target?.committedDate),
+				message : (ref.target?.messageHeadline || '') as string,
+			}))
+			.filter((branch: BranchInfo) => (
+				!Number.isNaN(branch.date.getTime())
+				&& branch.date >= oneHourAgo
+				&& !PROTECTED_BRANCH_NAMES.has(branch.name)
+				&& !prHeads.has(branch.name)
+			));
 	}
 
-	async fetchBranchesWithoutPRs(repo: string): Promise<BranchInfo[]> {
-		const [ branches, openPRs ] = await Promise.all([ this.fetchRecentBranches(repo), this.fetchAllPages(`/repos/${repo}/pulls?state=open`) ]);
-		const prHeads               = new Set(openPRs.filter((pr: any) => pr.head?.repo?.full_name?.toLowerCase() === repo.toLowerCase()).map((pr: any) => pr.head.ref));
-		return branches.filter(b => !prHeads.has(b.name));
-	}
-
-	async fetchPRDetail(owner: string, repo: string, number: number): Promise<any> {
-		const pr = await this.apiFetch(`/repos/${owner}/${repo}/pulls/${number}`, {
+	async fetchPRDetail(owner: string, repo: string, number: number, forceRefresh = false): Promise<any> {
+		const endpoint = `/repos/${owner}/${repo}/pulls/${number}${forceRefresh ? `?prism_refresh=${Date.now()}` : ''}`;
+		const pr       = await this.apiFetch(endpoint, forceRefresh ? {
+			// Merge completion is detected by repeatedly reading this endpoint. Use both a cache-busting URL and
+			// no-cache directives because intermediary caches can otherwise return a stale open PR.
+			cache   : 'no-store',
+			headers : {
+				'Accept'        : 'application/vnd.github.v3.full+json',
+				'Cache-Control' : 'no-cache',
+			},
+		} : {
 			headers : { Accept : 'application/vnd.github.v3.full+json' },
 		});
 		return normalizePullRequest(pr);
@@ -565,10 +624,10 @@ class GitHubAPI {
 	 * Request a squash merge through GitHub's asynchronous endpoint.
 	 *
 	 * This endpoint is required for stacked pull requests and also supports ordinary
-	 * pull requests. A 409 means GitHub already has a compatible merge request in
-	 * progress, so the existing PR-status polling can safely continue.
+	 * pull requests. A pending result includes a UUID that should be polled through
+	 * GitHub's dedicated async-merge result endpoint.
 	 */
-	async mergePullRequestSquash(owner: string, repo: string, number: number): Promise<void> {
+	async mergePullRequestSquash(owner: string, repo: string, number: number): Promise<AsyncMergeResult> {
 		const response = await fetch(`${this.apiBase}/repos/${owner}/${repo}/pulls/${number}/merge-async`, {
 			method  : 'PUT',
 			headers : {
@@ -586,6 +645,18 @@ class GitHubAPI {
 			}
 			throw apiError(formatGithubRestErrorMessage(response.status, body), { status : response.status });
 		}
+		return body;
+	}
+
+	/** Get the current result of an accepted asynchronous pull-request merge. */
+	async fetchAsyncMergeResult(owner: string, repo: string, number: number, uuid: string): Promise<AsyncMergeResult> {
+		return this.apiFetch(`/repos/${owner}/${repo}/pulls/${number}/merge-async/${encodeURIComponent(uuid)}?prism_refresh=${Date.now()}`, {
+			cache   : 'no-store',
+			headers : {
+				'Accept'        : 'application/vnd.github+json',
+				'Cache-Control' : 'no-cache',
+			},
+		});
 	}
 
 	/** PATCH pull request (title, state, etc.). Returns updated PR JSON. Draft changes use `setPullRequestDraft`. */
@@ -726,6 +797,27 @@ class GitHubAPI {
 				annotations : [],
 			};
 		});
+	}
+
+	async fetchTestFailures(owner: string, repo: string, check: CheckRunDetail): Promise<TestFailure[]> {
+		const workflowRunId = check.url?.match(/\/actions\/runs\/(\d+)/)?.[1];
+		if (!workflowRunId) {
+			return [];
+		}
+
+		const artifactList = await this.apiFetch(`/repos/${owner}/${repo}/actions/runs/${workflowRunId}/artifacts`);
+		const artifact     = artifactList.artifacts?.find((item: any) => item.name === `prism-test-failures-${check.name}` && !item.expired);
+		if (!artifact) {
+			return [];
+		}
+
+		const archive = await this.apiFetchArrayBuffer(`/repos/${owner}/${repo}/actions/artifacts/${artifact.id}/zip`);
+		const jsonl   = await readZipTextFile(archive, 'test-failures.jsonl');
+		return jsonl
+			.split('\n')
+			.filter(Boolean)
+			.map(line => parseTestFailure(line))
+			.filter((failure): failure is TestFailure => failure !== null);
 	}
 
 	async fetchRepoLabels(owner: string, repo: string): Promise<RepoLabel[]> {
@@ -987,6 +1079,188 @@ class GitHubAPI {
 export const GitHubClient = new GitHubAPI();
 export default GitHubClient;
 
+async function readZipTextFile(archive: ArrayBuffer, fileName: string): Promise<string> {
+	const bytes = new Uint8Array(archive);
+	const view  = new DataView(archive);
+	const end   = findZipEndOfCentralDirectory(view);
+	if (end < 0) {
+		return new TextDecoder().decode(bytes);
+	}
+
+	const directoryOffset = view.getUint32(end + 16, true);
+	const entries         = view.getUint16(end + 10, true);
+	let offset            = directoryOffset;
+	for (let index = 0; index < entries; index++) {
+		if (view.getUint32(offset, true) !== 0x02014b50) {
+			throw new Error('The test-results artifact has an invalid ZIP directory');
+		}
+		const compressionMethod  = view.getUint16(offset + 10, true);
+		const compressedSize     = view.getUint32(offset + 20, true);
+		const nameLength         = view.getUint16(offset + 28, true);
+		const extraLength        = view.getUint16(offset + 30, true);
+		const commentLength      = view.getUint16(offset + 32, true);
+		const localOffset        = view.getUint32(offset + 42, true);
+		const name               = new TextDecoder().decode(bytes.subarray(offset + 46, offset + 46 + nameLength));
+		offset                  += 46 + nameLength + extraLength + commentLength;
+		if (!name.endsWith(fileName)) {
+			continue;
+		}
+		if (view.getUint32(localOffset, true) !== 0x04034b50) {
+			throw new Error('The test-results artifact has an invalid ZIP entry');
+		}
+		const localNameLength  = view.getUint16(localOffset + 26, true);
+		const localExtraLength = view.getUint16(localOffset + 28, true);
+		const start            = localOffset + 30 + localNameLength + localExtraLength;
+		const data             = bytes.slice(start, start + compressedSize);
+		if (compressionMethod === 0) {
+			return new TextDecoder().decode(data);
+		}
+		if (compressionMethod !== 8) {
+			throw new Error(`Unsupported test-results compression method: ${compressionMethod}`);
+		}
+		const stream   = new Blob([ data ]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+		const inflated = await new Response(stream).arrayBuffer();
+		return new TextDecoder().decode(inflated);
+	}
+	return '';
+}
+
+function findZipEndOfCentralDirectory(view: DataView): number {
+	for (let offset = view.byteLength - 22; offset >= Math.max(0, view.byteLength - 65_557); offset--) {
+		if (view.getUint32(offset, true) === 0x06054b50) {
+			return offset;
+		}
+	}
+	return -1;
+}
+
+function parseTestFailure(line: string): TestFailure | null {
+	try {
+		const record = JSON.parse(line) as Record<string, unknown>;
+		if (typeof record.fullTitle !== 'string' || typeof record.message !== 'string') {
+			return null;
+		}
+		return {
+			suite     : typeof record.suite === 'string' ? record.suite : '',
+			name      : typeof record.name === 'string' ? record.name : record.fullTitle,
+			fullTitle : record.fullTitle,
+			message   : record.message,
+			stack     : typeof record.stack === 'string' ? record.stack : '',
+			file      : typeof record.file === 'string' ? record.file : null,
+			line      : typeof record.line === 'number' ? record.line : null,
+		};
+	}
+	catch {
+		return null;
+	}
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+	const batches: T[][] = [];
+	for (let index = 0; index < items.length; index += size) {
+		batches.push(items.slice(index, index + size));
+	}
+	return batches;
+}
+
+function parseRepositoryUrl(url: unknown): { owner: string; repo: string } {
+	const match = typeof url === 'string' ? url.match(/repos\/([^/]+)\/([^/]+)/) : null;
+	return { owner : match?.[1] || '', repo : match?.[2] || '' };
+}
+
+/** GraphQL reports a tri-state enum where the REST payload carried `mergeable` plus `mergeable_state`. */
+function mergeabilityFromGraphql(mergeable: string | null | undefined): PRMergeability {
+	if (mergeable === 'CONFLICTING') {
+		return { mergeable : false, mergeable_state : 'dirty' };
+	}
+	if (mergeable === 'MERGEABLE') {
+		return { mergeable : true, mergeable_state : 'clean' };
+	}
+	return { mergeable : null, mergeable_state : 'unknown' };
+}
+
+function checksSummaryFromPullRequest(node: any): ChecksSummary {
+	const contexts = node?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes || [];
+	const summary  = { passed : 0, failed : 0, pending : 0 };
+
+	for (const context of contexts) {
+		if (context.conclusion) {
+			if ([ 'SUCCESS', 'NEUTRAL', 'SKIPPED' ].includes(context.conclusion)) {
+				summary.passed++;
+			}
+			else if ([ 'FAILURE', 'TIMED_OUT', 'CANCELLED' ].includes(context.conclusion)) {
+				summary.failed++;
+			}
+			else {
+				summary.pending++;
+			}
+		}
+		else if (context.state) {
+			if (context.state === 'SUCCESS') {
+				summary.passed++;
+			}
+			else if (context.state === 'FAILURE' || context.state === 'ERROR') {
+				summary.failed++;
+			}
+			else {
+				summary.pending++;
+			}
+		}
+		else {
+			summary.pending++;
+		}
+	}
+
+	return summary;
+}
+
+function botCountsFromReviewThreads(threads: any[] | undefined): BotCounts {
+	const counts: BotCounts = { low : 0, medium : 0, high : 0 };
+
+	for (const thread of threads || []) {
+		if (thread.isResolved || !thread.comments?.nodes?.length) {
+			continue;
+		}
+		const comment = thread.comments.nodes[0];
+		if (!CURSOR_BOT.test(comment.author?.login || '')) {
+			continue;
+		}
+		counts[parseBotSeverity(comment.body)]++;
+	}
+
+	return counts;
+}
+
+function parseBotSeverity(body: string): keyof BotCounts {
+	if (!body) {
+		return 'medium';
+	}
+	const lower = body.toLowerCase();
+	if (/\bcritical\b/.test(lower) || /\bhigh\b/.test(lower) || /\berror\b/.test(lower) || /\bbug\b/.test(lower) || /severity:\s*high/i.test(body)) {
+		return 'high';
+	}
+	if (/\bsuggestion\b/.test(lower) || /\bnit\b/.test(lower) || /\bminor\b/.test(lower) || /\blow\b/.test(lower) || /severity:\s*low/i.test(body)) {
+		return 'low';
+	}
+	return 'medium';
+}
+
+/**
+ * Rebuild the `head`/`base` shape the board expects (`ref`, `sha`, `repo.full_name`) from GraphQL fields.
+ * Search results omit these entirely, and the checkout matching in gitCheckoutClient depends on them.
+ */
+function refDescriptor(repository: any, refName: unknown, oid: unknown): { ref: string; sha: string; repo: { full_name: string } } | null {
+	const fullName = repository?.nameWithOwner;
+	if (typeof refName !== 'string' || !refName || typeof fullName !== 'string' || !fullName) {
+		return null;
+	}
+	return {
+		ref  : refName,
+		sha  : typeof oid === 'string' ? oid : '',
+		repo : { full_name : fullName },
+	};
+}
+
 function rateLimitResetFromHeaders(resetHeader: string | null, retryAfter: string | null): Date | null {
 	if (resetHeader) {
 		return new Date(parseInt(resetHeader, 10) * 1000);
@@ -1087,6 +1361,20 @@ export interface PRMergeability {
 	mergeable_state?: string | null;
 }
 
+export interface WorktreeCheckoutTarget {
+	branch: string;
+	remoteRepos: string[];
+}
+
+export interface AsyncMergeResult {
+	status?: 'pending' | 'merged' | 'enqueued' | 'failed';
+	details?: {
+		message?: string;
+		uuid?: string;
+		sha?: string;
+	};
+}
+
 export interface AccessibleRepo {
 	fullName: string;
 	ownerLogin: string;
@@ -1122,6 +1410,16 @@ export interface CheckRunDetail {
 	startedAt: string | null;
 	completedAt: string | null;
 	annotations: CheckAnnotation[];
+}
+
+export interface TestFailure {
+	suite: string;
+	name: string;
+	fullTitle: string;
+	message: string;
+	stack: string;
+	file: string | null;
+	line: number | null;
 }
 
 export interface RepoLabel {

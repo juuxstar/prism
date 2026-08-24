@@ -53,6 +53,15 @@
 						</button>
 					</div>
 					<div class="pr-detail-header-right u-flex u-items-center u-gap-3 u-flex-1 u-justify-end">
+						<a
+							v-if="cursorCheckoutHref && activeTab !== 'overview'"
+							:href="cursorCheckoutHref"
+							class="pr-detail-open-cursor-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-whitespace-nowrap"
+							:title="'Open ' + cursorCheckoutPath + ' in Cursor'"
+						>
+							<span class="u-flex u-items-center u-justify-center" aria-hidden="true" v-html="$icon('externalLink', 14)"></span>
+							<span>Open in Cursor</span>
+						</a>
 						<button
 							type="button"
 							class="pr-detail-header-refresh-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-cursor-pointer u-whitespace-nowrap"
@@ -278,9 +287,9 @@ import PrTitleEditModal                         from '@/components/pr/PrTitleEdi
 import PrWhitespaceViewedModal                  from '@/components/pr/PrWhitespaceViewedModal.vue';
 import SettingsPopup                            from '@/components/pr/SettingsPopup.vue';
 import { clearToken, getStoredToken }           from '@/lib/api/auth';
-import type { GitWorkspaceStatus, LocalPrStatus } from '@/lib/api/gitCheckoutClient';
+import type { GitWorkspaceStatus, LocalPrStatus, PullRequestCheckoutState } from '@/lib/api/gitCheckoutClient';
 import { checkoutPullRequestBranch, checkoutStateForPr, checkoutTargetForPr, commitLocalPullRequestChanges, fetchGitWorkspaceStatus, fetchLocalPullRequestFileContent, fetchLocalPullRequestFiles, fetchLocalPullRequestStatus, pushLocalPullRequestChanges } from '@/lib/api/gitCheckoutClient';
-import type { CheckRunDetail, IssueComment, PendingComment, PRFile, RepoLabel, ReviewComment } from '@/lib/api/githubClient';
+import type { AsyncMergeResult, CheckRunDetail, IssueComment, PendingComment, PRFile, RepoLabel, ReviewComment } from '@/lib/api/githubClient';
 import GitHubClient                             from '@/lib/api/githubClient';
 import { isWhitespaceOnlyFileChange }           from '@/lib/diff/patchDiff';
 import { loadLocalViewedFiles, setLocalFileViewed } from '@/lib/localViewedFiles';
@@ -289,7 +298,7 @@ import type { ResolvedScheme }                  from '@/lib/theme/colorScheme';
 import { getResolvedScheme, subscribeColorScheme } from '@/lib/theme/colorScheme';
 import { getDiffFontSize, getDiffTabSize, setDiffFontSize, setDiffTabSize, subscribeDiffSettings } from '@/lib/theme/diffSettings';
 import { getStoredHljsThemeId, loadHljsTheme, setStoredHljsThemeId } from '@/lib/theme/hljsTheme';
-import { timeAgo }                              from '@/lib/utils';
+import { timeAgo, toCursorFileHref }            from '@/lib/utils';
 
 import { Component, Prop, Vue, Watch } from 'vue-facing-decorator';
 
@@ -529,9 +538,22 @@ export default class PrDetailView extends Vue {
 		return Math.min(100, Math.round((this.reviewedCount / total) * 100));
 	}
 
+	get checkoutState(): PullRequestCheckoutState | null {
+		return checkoutStateForPr(this.pr, this.checkoutStatus);
+	}
+
+	get cursorCheckoutPath(): string {
+		return this.checkoutState?.hostPath || this.checkoutState?.path || '';
+	}
+
+	get cursorCheckoutHref(): string {
+		const path = this.cursorCheckoutPath;
+		return path ? toCursorFileHref(path) : '';
+	}
+
 	/** Without a local checkout of the PR branch there can be no local file changes, so the Local Files tab is hidden. */
 	get hasLocalCheckout(): boolean {
-		return Boolean(checkoutStateForPr(this.pr, this.checkoutStatus));
+		return Boolean(this.checkoutState);
 	}
 
 	get whitespaceOnlyUnviewedFiles(): PRFile[] {
@@ -692,10 +714,10 @@ export default class PrDetailView extends Vue {
 	}
 
 	/** Reload PR + related data without the full-page loading overlay (e.g. after merge completes). */
-	private async refreshMergedPullRequest(): Promise<void> {
+	private async refreshMergedPullRequest(mergedPr?: any): Promise<void> {
 		try {
 			const [ pr, decision ] = await Promise.all([
-				GitHubClient.fetchPRDetail(this.owner, this.repo, this.prNumber),
+				mergedPr || GitHubClient.fetchPRDetail(this.owner, this.repo, this.prNumber, true),
 				GitHubClient.fetchPullRequestReviewDecision(this.owner, this.repo, this.prNumber),
 			]);
 			this.pr             = pr;
@@ -733,12 +755,12 @@ export default class PrDetailView extends Vue {
 		const deadline = Date.now() + 120_000;
 		while (Date.now() < deadline && !this.mergePollCancelled) {
 			try {
-				const detail = await GitHubClient.fetchPRDetail(this.owner, this.repo, this.prNumber);
+				const detail = await GitHubClient.fetchPRDetail(this.owner, this.repo, this.prNumber, true);
 				if (this.mergePollCancelled) {
 					return;
 				}
 				if (detail.merged) {
-					await this.refreshMergedPullRequest();
+					await this.refreshMergedPullRequest(detail);
 					return;
 				}
 			}
@@ -746,6 +768,48 @@ export default class PrDetailView extends Vue {
 				/* Keep polling until deadline */
 			}
 			await this.delay(2000);
+		}
+		if (!this.mergePollCancelled) {
+			await this.refreshMergedPullRequest();
+		}
+	}
+
+	/** Apply a definitive result from GitHub's async-merge endpoint. Returns true for a terminal result. */
+	private async handleAsyncMergeResult(result: AsyncMergeResult): Promise<boolean> {
+		if (result.status === 'merged') {
+			await this.refreshMergedPullRequest({
+				...this.pr,
+				merged    : true,
+				merged_at : this.pr?.merged_at || new Date().toISOString(),
+				state     : 'closed',
+			});
+			return true;
+		}
+		if (result.status === 'failed') {
+			this.mergePrError = result.details?.message || 'Merge failed';
+			return true;
+		}
+		if (result.status === 'enqueued') {
+			await this.refreshMergedPullRequest();
+			return true;
+		}
+		return false;
+	}
+
+	/** Poll the merge request itself: GitHub recommends this endpoint over waiting for the PR record to change. */
+	private async pollAsyncMergeResult(uuid: string): Promise<void> {
+		const deadline = Date.now() + 120_000;
+		while (Date.now() < deadline && !this.mergePollCancelled) {
+			try {
+				const result = await GitHubClient.fetchAsyncMergeResult(this.owner, this.repo, this.prNumber, uuid);
+				if (this.mergePollCancelled || await this.handleAsyncMergeResult(result)) {
+					return;
+				}
+			}
+			catch {
+				/* Fall back to the next result check while the merge request is still available. */
+			}
+			await this.delay(1000);
 		}
 		if (!this.mergePollCancelled) {
 			await this.refreshMergedPullRequest();
@@ -1555,8 +1619,9 @@ export default class PrDetailView extends Vue {
 		}
 		this.mergePrError = '';
 		this.mergingPr    = true;
+		let mergeResult: AsyncMergeResult;
 		try {
-			await GitHubClient.mergePullRequestSquash(this.owner, this.repo, this.prNumber);
+			mergeResult = await GitHubClient.mergePullRequestSquash(this.owner, this.repo, this.prNumber);
 		}
 		catch (e: any) {
 			console.error('Failed to merge PR:', e);
@@ -1568,7 +1633,16 @@ export default class PrDetailView extends Vue {
 		this.mergeConfirmOpen   = false;
 		this.mergePollCancelled = false;
 		try {
-			await this.pollUntilMerged();
+			if (await this.handleAsyncMergeResult(mergeResult)) {
+				return;
+			}
+			const uuid = mergeResult.status === 'pending' ? mergeResult.details?.uuid : undefined;
+			if (uuid) {
+				await this.pollAsyncMergeResult(uuid);
+			}
+			else {
+				await this.pollUntilMerged();
+			}
 		}
 		finally {
 			this.mergingPr = false;
@@ -1653,6 +1727,30 @@ html[data-color-scheme="light"] .pr-detail-header {
 		color var(--transition),
 		border-color var(--transition),
 		background var(--transition);
+}
+
+.pr-detail-open-cursor-btn {
+	min-height: 30px;
+	padding: 5px 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--bg-primary);
+	color: var(--text-secondary);
+	font: inherit;
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 1;
+	text-decoration: none;
+	transition:
+		color var(--transition),
+		border-color var(--transition),
+		background var(--transition);
+}
+
+.pr-detail-open-cursor-btn:hover {
+	color: var(--text-primary);
+	border-color: var(--text-tertiary);
+	background: var(--bg-tertiary);
 }
 
 .pr-detail-header-refresh-btn:hover:not(:disabled) {

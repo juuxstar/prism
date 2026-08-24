@@ -7,6 +7,8 @@ export interface GitCheckout {
 	label: string;
 	branch: string;
 	headSha: string;
+	aheadCount?: number;
+	behindCount?: number;
 	dirty: boolean;
 	remoteRepos: string[];
 	isMain: boolean;
@@ -14,6 +16,7 @@ export interface GitCheckout {
 
 export interface GitWorkspaceStatus {
 	workspaceDir: string;
+	hostWorkspaceDir?: string;
 	mode: 'none' | 'single' | 'worktree-parent';
 	checkouts: GitCheckout[];
 	error?: string;
@@ -76,6 +79,14 @@ export async function checkoutPullRequestBranch(pr: PullRequestCheckoutTarget, w
 	return body.status;
 }
 
+export async function resetWorktreeToNaturalBranch(worktreePath: string): Promise<GitWorkspaceStatus> {
+	return postGitJson('/api/git/reset-worktree', { worktreePath }, true);
+}
+
+export async function pullWorktreeBranch(worktreePath: string): Promise<GitWorkspaceStatus> {
+	return postGitJson('/api/git/pull-worktree', { worktreePath }, true);
+}
+
 export async function fetchLocalPullRequestFiles(pr: PullRequestCheckoutTarget): Promise<PRFile[]> {
 	return postGitJson('/api/git/local-files', { pr });
 }
@@ -90,7 +101,7 @@ export async function fetchLocalPullRequestFileContent(pr: PullRequestCheckoutTa
 }
 
 export async function fetchLocalPullRequestStatus(pr: PullRequestCheckoutTarget): Promise<LocalPrStatus> {
-	return postGitJson('/api/git/local-status', { pr });
+	return postGitJson('/api/git/local-status', { pr }, true);
 }
 
 export async function commitLocalPullRequestChanges(pr: PullRequestCheckoutTarget, message: string): Promise<LocalPrStatus> {
@@ -142,21 +153,28 @@ function branchMatches(checkoutBranch: string, prBranch: string): boolean {
 	return checkoutBranch === prBranch || checkoutBranch.endsWith(`/${prBranch}`);
 }
 
+/** Whether a local checkout is sitting on the given pull request's head branch. */
+export function checkoutMatchesPullRequest(checkout: GitCheckout, pr: any): boolean {
+	const target = checkoutTargetForPr(pr);
+	if (!target) {
+		return false;
+	}
+	const remoteRepos = checkout.remoteRepos.map(repo => repo.toLowerCase());
+	const headRepo    = target.headRepo.toLowerCase();
+	const baseRepo    = target.baseRepo?.toLowerCase();
+	const repoMatches = remoteRepos.includes(headRepo) || Boolean(baseRepo && remoteRepos.includes(baseRepo));
+	const branchMatch = branchMatches(checkout.branch, target.headRef);
+	const shaMatches  = Boolean(target.headSha && checkout.headSha === target.headSha);
+	return shaMatches || (branchMatch && (repoMatches || remoteRepos.length === 0));
+}
+
 export function checkoutStateForPr(pr: any, status: GitWorkspaceStatus | null): PullRequestCheckoutState | null {
 	const target = checkoutTargetForPr(pr);
 	if (!target || !status?.checkouts.length) {
 		return null;
 	}
-	const headRepo = target.headRepo.toLowerCase();
-	const baseRepo = target.baseRepo?.toLowerCase();
-	const headRef  = target.headRef;
-	const headSha  = target.headSha;
-	const match    = status.checkouts.find(checkout => {
-		const repoMatches = checkout.remoteRepos.includes(headRepo) || Boolean(baseRepo && checkout.remoteRepos.includes(baseRepo));
-		const branchMatch = branchMatches(checkout.branch, headRef);
-		const shaMatches  = Boolean(headSha && checkout.headSha === headSha);
-		return shaMatches || (branchMatch && (repoMatches || checkout.remoteRepos.length === 0));
-	});
+	const headSha = target.headSha;
+	const match   = status.checkouts.find(checkout => checkoutMatchesPullRequest(checkout, pr));
 	if (!match) {
 		return null;
 	}

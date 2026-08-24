@@ -1,6 +1,6 @@
 <template>
 	<section class="screen">
-		<div v-if="!isDraftMode" class="pr-columns u-grid u-gap-4 u-py-4 u-px-6 u-m-auto u-w-full u-flex-1 u-min-h-0 u-content-stretch">
+		<div v-if="!isDraftMode && !isWorktreesMode" class="pr-columns u-grid u-gap-4 u-py-4 u-px-6 u-m-auto u-w-full u-flex-1 u-min-h-0 u-content-stretch">
 			<div class="pr-column pr-column-split">
 				<create-pr-section v-if="branches.length > 0" :branches="branches" @create-pr="$emit('create-pr', $event)" />
 				<div v-if="orderedOther.length" class="pr-subcolumn">
@@ -100,7 +100,79 @@
 				/>
 			</div>
 		</div>
-		<div v-if="isEmpty" class="empty-state u-flex u-flex-col u-items-center u-justify-center u-text-center u-gap-3-5 u-fs-15 u-text-tertiary u-py-25 u-px-8">
+		<div v-if="isWorktreesMode" class="worktrees-view u-py-4 u-px-6 u-m-auto u-w-full">
+			<section class="worktrees-panel">
+				<div class="worktrees-panel-header u-flex u-items-center u-justify-between u-gap-3">
+					<div>
+						<h2 class="u-m-0 u-fs-16 u-fw-600 u-text-primary">Worktrees</h2>
+						<p class="u-m-0 u-mt-1 u-fs-12 u-text-tertiary">
+							Local checkouts in
+							<span class="worktree-workspace-path u-font-mono" :title="worktreeWorkspacePath">{{ worktreeWorkspacePath || "the configured worktree directory" }}</span>
+						</p>
+					</div>
+					<span v-if="hasWorktreeParent" class="u-fs-12 u-text-tertiary">{{ worktreeRows.length }}</span>
+				</div>
+				<div v-if="checkoutStatusLoading" class="worktrees-loading u-flex u-flex-col u-items-center u-justify-center u-gap-3 u-fs-14 u-text-tertiary" aria-busy="true">
+					<span class="spinner" aria-hidden="true"></span>
+					<span>Loading worktrees…</span>
+				</div>
+				<div v-else-if="hasWorktreeParent" class="worktree-list">
+					<div v-for="row in worktreeRows" :key="row.checkout.path" class="worktree-row">
+						<div class="u-min-w-0">
+							<div class="u-fs-14 u-fw-600 u-text-primary u-truncate">{{ row.checkout.label }}</div>
+							<div v-if="row.displayPath" class="worktree-path u-fs-12 u-font-mono u-text-tertiary u-truncate" :title="row.checkout.hostPath || row.checkout.path">
+								{{ row.displayPath }}
+							</div>
+						</div>
+						<div class="worktree-details">
+							<div class="worktree-detail">
+								<span class="worktree-detail-label worktree-branch-label">Branch:</span>
+								<div class="worktree-branch-content u-flex u-items-center u-gap-2 u-flex-wrap">
+									<span class="worktree-branch u-fs-12 u-font-mono" :title="row.checkout.branch">{{ row.checkout.branch || "Detached HEAD" }}</span>
+									<span
+										v-if="hasOriginCounterpart(row.checkout)"
+										class="worktree-divergence u-fs-11 u-font-mono"
+										:title="branchDivergenceText(row.checkout)"
+									>{{ branchDivergenceText(row.checkout) }}</span>
+									<span v-else class="worktree-divergence worktree-divergence-unavailable u-fs-11">No origin branch</span>
+									<button
+										v-if="row.checkout.behindCount"
+										class="worktree-pull u-fs-11 u-fw-600"
+										:disabled="pullingWorktreePath === row.checkout.path"
+										@click="pullWorktree(row.checkout)"
+									>
+										<span v-if="pullingWorktreePath === row.checkout.path" class="async-loader"></span>
+										<template v-else>Pull {{ row.checkout.behindCount }} commit{{ row.checkout.behindCount === 1 ? '' : 's' }}</template>
+									</button>
+									<button
+										v-if="canRestoreWorktree(row.checkout)"
+										class="worktree-reset u-fs-11 u-fw-600"
+										:disabled="resettingWorktreePath === row.checkout.path"
+										:title="`Restore ${row.checkout.label} from origin/dev`"
+										@click="resetWorktree(row.checkout)"
+									>
+										<span v-if="resettingWorktreePath === row.checkout.path" class="async-loader"></span>
+										<template v-else>Restore</template>
+									</button>
+								</div>
+							</div>
+							<div class="worktree-detail">
+								<span class="worktree-detail-label worktree-pr-label">Pull request:</span>
+								<div v-if="row.pr" class="worktree-pr-content u-flex u-items-center u-gap-2 u-flex-wrap">
+									<button class="worktree-pr u-fs-12 u-fw-600" @click="openWorktreePullRequest(row.pr)">#{{ row.pr.number }} {{ row.pr.title }}</button>
+									<span class="worktree-pr-status u-fs-11 u-fw-600" :class="`worktree-pr-status-${worktreePrStatus(row.pr).toLowerCase()}`">{{ worktreePrStatus(row.pr) }}</span>
+								</div>
+								<span v-else class="worktree-no-pr u-fs-12">No PR</span>
+							</div>
+						</div>
+					</div>
+				</div>
+				<div v-else class="worktrees-empty u-text-center u-fs-14 u-text-tertiary">
+					{{ checkoutStatus?.error || "No worktree directory is configured." }}
+				</div>
+			</section>
+		</div>
+		<div v-if="!isWorktreesMode && isEmpty" class="empty-state u-flex u-flex-col u-items-center u-justify-center u-text-center u-gap-3-5 u-fs-15 u-text-tertiary u-py-25 u-px-8">
 			<span class="u-opacity-30" v-html="$icon('gitBranch', 32)"></span>
 			<p class="u-m-0">No pull requests found</p>
 		</div>
@@ -108,8 +180,9 @@
 </template>
 
 <script lang="ts">
-import type { GitWorkspaceStatus } from '@/lib/api/gitCheckoutClient';
-import GitHubClient                from '@/lib/api/githubClient';
+import type { GitCheckout, GitWorkspaceStatus } from '@/lib/api/gitCheckoutClient';
+import { checkoutMatchesPullRequest, pullWorktreeBranch, resetWorktreeToNaturalBranch } from '@/lib/api/gitCheckoutClient';
+import GitHubClient                             from '@/lib/api/githubClient';
 
 import { Component, Prop, Vue } from 'vue-facing-decorator';
 
@@ -127,7 +200,7 @@ const SECTION_LABELS: Record<string, { add: string; remove: string[] }> = {
 };
 
 /** Main board layout that categorizes PRs into columns and handles drag-and-drop reordering. */
-@Component({ emits : [ 'create-pr', 'api-error', 'show-error', 'prs-changed', 'open-pr' ] })
+@Component({ emits : [ 'create-pr', 'api-error', 'show-error', 'prs-changed', 'open-pr', 'checkout-status-changed' ] })
 export default class PrBoard extends Vue {
 
 	@Prop({ required : true }) readonly allPrs!: any[];
@@ -138,11 +211,15 @@ export default class PrBoard extends Vue {
 	@Prop({ required : true }) readonly branches!: any[];
 	@Prop({ required : true }) readonly user!: any;
 	@Prop({ default : null }) readonly checkoutStatus!: GitWorkspaceStatus | null;
+	@Prop({ default : false }) readonly checkoutStatusLoading!: boolean;
+	@Prop({ default : () => [] }) readonly worktreePrs!: any[];
 
 	alphaHidden = ALPHA_HIDDEN_LABELS;
 	betaHidden = BETA_HIDDEN_LABELS;
 	mergeHidden = MERGE_HIDDEN_LABELS;
 	emptySet = new Set<string>();
+	resettingWorktreePath: string | null = null;
+	pullingWorktreePath: string | null = null;
 
 	get teamPrefix(): string {
 		return TEAM_GREEK[this.selectedTeam] || 'α';
@@ -154,6 +231,30 @@ export default class PrBoard extends Vue {
 
 	get isDraftMode(): boolean {
 		return this.currentTypeFilter === 'draft';
+	}
+
+	get isWorktreesMode(): boolean {
+		return this.currentTypeFilter === 'worktrees';
+	}
+
+	get hasWorktreeParent(): boolean {
+		return this.checkoutStatus?.mode === 'worktree-parent';
+	}
+
+	get worktreeWorkspacePath(): string {
+		return this.checkoutStatus?.hostWorkspaceDir || this.checkoutStatus?.workspaceDir || '';
+	}
+
+	get worktreeRows(): WorktreeRow[] {
+		if (!this.hasWorktreeParent) {
+			return [];
+		}
+		const pullRequests = [ ...this.allPrs, ...this.worktreePrs ];
+		return this.checkoutStatus!.checkouts.map(checkout => ({
+			checkout,
+			displayPath : displayWorktreePath(checkout, this.worktreeWorkspacePath),
+			pr          : pullRequests.find(pr => checkoutMatchesPullRequest(checkout, pr)) || null,
+		}));
 	}
 
 	get filteredPRs(): any[] {
@@ -349,6 +450,83 @@ export default class PrBoard extends Vue {
 		}
 	}
 
+	openWorktreePullRequest(pr: any): void {
+		const match  = pr?.repository_url?.match(/repos\/([^/]+)\/([^/]+)/);
+		const number = Number(pr?.number);
+		if (!match || !Number.isInteger(number)) {
+			return;
+		}
+		this.$emit('open-pr', { owner : match[1], repo : match[2], number });
+	}
+
+	worktreePrStatus(pr: any): string {
+		if (pr?.merged) {
+			return 'Merged';
+		}
+		if (pr?.draft) {
+			return 'Draft';
+		}
+		return pr?.state === 'open' ? 'Open' : 'Closed';
+	}
+
+	hasOriginCounterpart(checkout: GitCheckout): boolean {
+		return checkout.aheadCount !== undefined && checkout.behindCount !== undefined;
+	}
+
+	branchDivergenceText(checkout: GitCheckout): string {
+		return `↑ ${checkout.aheadCount} ahead · ↓ ${checkout.behindCount} behind`;
+	}
+
+	canRestoreWorktree(checkout: GitCheckout): boolean {
+		return checkout.branch !== checkout.label;
+	}
+
+	async resetWorktree(checkout: GitCheckout): Promise<void> {
+		if (!window.confirm(`Restore ${checkout.label} to its ${checkout.label} branch at the latest origin/dev? This permanently discards all uncommitted changes, including unstaged files.`)) {
+			return;
+		}
+
+		this.resettingWorktreePath = checkout.path;
+		try {
+			this.$emit('checkout-status-changed', await resetWorktreeToNaturalBranch(checkout.path));
+		}
+		catch (error) {
+			this.$emit('api-error', error);
+		}
+		finally {
+			this.resettingWorktreePath = null;
+		}
+	}
+
+	async pullWorktree(checkout: GitCheckout): Promise<void> {
+		this.pullingWorktreePath = checkout.path;
+		try {
+			this.$emit('checkout-status-changed', await pullWorktreeBranch(checkout.path));
+		}
+		catch (error) {
+			this.$emit('api-error', error);
+		}
+		finally {
+			this.pullingWorktreePath = null;
+		}
+	}
+
+}
+
+function relativeWorktreePath(path: string, workspaceDir: string): string {
+	const prefix = `${workspaceDir.replace(/\/+$/, '')}/`;
+	return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
+function displayWorktreePath(checkout: GitCheckout, workspaceDir: string): string {
+	const path = relativeWorktreePath(checkout.hostPath || checkout.path, workspaceDir);
+	return path === checkout.label ? '' : path;
+}
+
+interface WorktreeRow {
+	checkout: GitCheckout;
+	displayPath: string;
+	pr: any | null;
 }
 </script>
 
@@ -357,14 +535,237 @@ export default class PrBoard extends Vue {
 	grid-template-columns: repeat(3, 1fr);
 	grid-template-rows: 1fr;
 	max-width: var(--content-max-width);
+	overflow-y: auto;
+	overscroll-behavior: contain;
 }
 
-.drafts-view {
+.drafts-view,
+.worktrees-view {
+	flex: 1;
+	min-height: 0;
 	max-width: var(--content-max-width);
+	overflow-y: auto;
+	overscroll-behavior: contain;
 }
 
 .drafts-column {
 	max-width: 600px;
+}
+
+.worktrees-view {
+	max-width: 1160px;
+	font-size: 15px;
+}
+
+.worktrees-view .u-fs-12 {
+	font-size: 13px;
+}
+
+.worktrees-view .u-fs-14 {
+	font-size: 15px;
+}
+
+.worktrees-view .u-fs-16 {
+	font-size: 17px;
+}
+
+.worktrees-panel {
+	background: var(--bg-secondary);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	overflow: hidden;
+}
+
+.worktrees-panel-header,
+.worktree-row {
+	padding: var(--u-4) var(--u-5);
+}
+
+.worktrees-panel-header {
+	border-bottom: 1px solid var(--border);
+}
+
+.worktree-row + .worktree-row {
+	border-top: 1px solid var(--border);
+}
+
+.worktree-row {
+	display: grid;
+	grid-template-columns: minmax(260px, 1fr) minmax(460px, 640px);
+	align-items: center;
+	gap: var(--u-4);
+}
+
+.worktree-workspace-path {
+	color: var(--accent-purple);
+}
+
+.worktree-path {
+	margin-top: var(--u-1);
+	max-width: 620px;
+}
+
+.worktree-details {
+	display: flex;
+	flex-direction: column;
+	gap: var(--u-1-5);
+	min-width: 0;
+	width: 100%;
+}
+
+.worktree-detail {
+	display: grid;
+	grid-template-columns: 104px minmax(0, 1fr);
+	align-items: center;
+	text-align: left;
+	gap: var(--u-2);
+}
+
+.worktree-detail-label {
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.worktree-branch-label {
+	color: var(--accent-green);
+}
+
+.worktree-pr-label {
+	color: var(--accent-blue);
+}
+
+.worktree-branch {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	text-align: left;
+	padding: 3px var(--u-2);
+	border-radius: var(--radius-sm);
+	background: var(--chip-green-bg);
+	color: var(--accent-green);
+}
+
+.worktree-divergence {
+	color: var(--text-secondary);
+}
+
+.worktree-divergence-unavailable {
+	color: var(--text-tertiary);
+}
+
+.worktree-pull {
+	padding: 3px var(--u-2);
+	border: 1px solid var(--accent-green);
+	border-radius: var(--radius-sm);
+	background: var(--accent-green-faint-bg);
+	color: var(--accent-green);
+	cursor: pointer;
+	font-family: inherit;
+}
+
+.worktree-pull:hover:not(:disabled) {
+	background: var(--accent-green-selected-bg);
+}
+
+.worktree-pull:disabled {
+	cursor: wait;
+	opacity: 0.7;
+}
+
+.worktree-pull .async-loader {
+	width: 32px;
+	height: 6px;
+}
+
+.worktree-pr {
+	width: fit-content;
+	max-width: 100%;
+	text-align: left;
+	white-space: normal;
+	border: 1px solid var(--accent-blue);
+	border-radius: var(--radius-sm);
+	background: var(--chip-blue-bg);
+	color: var(--accent-blue);
+	cursor: pointer;
+	font-family: inherit;
+	padding: 3px var(--u-2);
+}
+
+.worktree-pr-status,
+.worktree-reset {
+	padding: 3px var(--u-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	white-space: nowrap;
+}
+
+.worktree-pr-status-open {
+	border-color: var(--accent-blue);
+	background: var(--chip-blue-bg);
+	color: var(--accent-blue);
+}
+
+.worktree-pr-status-draft {
+	border-color: var(--accent-orange);
+	background: var(--chip-orange-bg);
+	color: var(--accent-orange);
+}
+
+.worktree-pr-status-merged {
+	border-color: var(--accent-purple);
+	background: var(--chip-purple-bg);
+	color: var(--accent-purple);
+}
+
+.worktree-pr-status-closed {
+	background: var(--muted-bg);
+	color: var(--text-tertiary);
+}
+
+.worktree-reset {
+	background: var(--btn-secondary-bg);
+	color: var(--text-secondary);
+	cursor: pointer;
+	font-family: inherit;
+}
+
+.worktree-reset:hover:not(:disabled) {
+	border-color: var(--accent-green);
+	color: var(--accent-green);
+}
+
+.worktree-reset:disabled {
+	cursor: wait;
+	opacity: 0.7;
+}
+
+.worktree-reset .async-loader {
+	width: 32px;
+	height: 6px;
+}
+
+.worktree-pr:hover {
+	text-decoration: underline;
+}
+
+.worktree-no-pr {
+	width: fit-content;
+	padding: 3px var(--u-2);
+	border-radius: var(--radius-sm);
+	background: var(--muted-bg);
+	color: var(--text-tertiary);
+	text-align: left;
+}
+
+.worktrees-empty {
+	padding: var(--u-8) var(--u-5);
+}
+
+.worktrees-loading {
+	min-height: 220px;
+	padding: var(--u-8) var(--u-5);
 }
 
 .pr-column {
@@ -392,6 +793,8 @@ html[data-color-scheme="light"] .pr-column-header {
 .pr-column-split {
 	display: flex;
 	flex-direction: column;
+	align-self: start;
+	height: max-content;
 	gap: 0;
 	padding: 0;
 	background: none;
