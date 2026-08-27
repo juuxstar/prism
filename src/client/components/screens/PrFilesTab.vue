@@ -544,7 +544,10 @@ export default class PrFilesTab extends Vue {
 	private _filesInitialized = false;
 
 	@Watch('files', { immediate : true })
-	onFilesChanged() {
+	onFilesChanged(_files: PRFile[], previousFiles?: PRFile[]) {
+		// A refresh hands over a brand new array, so the cached diffs are dropped and re-read from the
+		// refreshed head. Note which file was open first, to put the reader back on it below.
+		const previousPath = previousFiles?.[this.currentIndex]?.filename;
 		this._contentCache.clear();
 		this.baseContent      = null;
 		this.headContent      = null;
@@ -556,7 +559,8 @@ export default class PrFilesTab extends Vue {
 			this.currentIndex      = idx >= 0 && idx < this.files.length ? idx : 0;
 		}
 		else {
-			this.currentIndex = 0;
+			const restoredIndex = previousPath ? this.indexForFilename(previousPath) : -1;
+			this.currentIndex   = restoredIndex >= 0 ? restoredIndex : 0;
 		}
 		if (this.files.length) {
 			this.loadFileContent();

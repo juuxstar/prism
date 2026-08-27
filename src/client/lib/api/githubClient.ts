@@ -9,6 +9,14 @@ const WORKTREE_PR_DETAIL_LIMIT = 5;
 const PROTECTED_BRANCH_NAMES   = new Set([ 'dev', 'main', 'master' ]);
 const CURSOR_BOT               = /^cursor\b/i;
 
+/**
+ * Fetch options for a user-triggered refresh. GitHub serves its REST responses with `max-age=60`, so both the
+ * browser and GitHub's own CDN will happily hand back a minute-old pull request — long enough that a reader who
+ * pushes a commit and hits Refresh sees the previous diff. `no-cache` forces revalidation instead of a plain
+ * cache read; GitHub does not charge rate limit for the 304s that revalidation usually returns.
+ */
+const REVALIDATE_OPTIONS = { cache : 'no-cache' as RequestCache, headers : { 'Cache-Control' : 'no-cache' } };
+
 const CHECK_ROLLUP_SELECTION = `
 	commits(last: 1) {
 		nodes { commit { statusCheckRollup { contexts(first: ${CHECK_CONTEXT_LIMIT}) {
@@ -230,14 +238,14 @@ class GitHubAPI {
 		return allItems;
 	}
 
-	private async fetchAllPages(endpoint: string): Promise<any[]> {
+	private async fetchAllPages(endpoint: string, options: any = {}): Promise<any[]> {
 		let allItems: any[] = [];
 		let page            = 1;
 		const perPage       = 100;
 
 		while (true) {
 			const sep   = endpoint.includes('?') ? '&' : '?';
-			const items = await this.apiFetch(`${endpoint}${sep}per_page=${perPage}&page=${page}`);
+			const items = await this.apiFetch(`${endpoint}${sep}per_page=${perPage}&page=${page}`, options);
 			allItems    = allItems.concat(items);
 			if (items.length < perPage) {
 				break;
@@ -699,8 +707,8 @@ class GitHubAPI {
 		return { draft : Boolean(isDraft) };
 	}
 
-	async fetchPRFiles(owner: string, repo: string, number: number): Promise<PRFile[]> {
-		return this.fetchAllPages(`/repos/${owner}/${repo}/pulls/${number}/files`);
+	async fetchPRFiles(owner: string, repo: string, number: number, forceRefresh = false): Promise<PRFile[]> {
+		return this.fetchAllPages(`/repos/${owner}/${repo}/pulls/${number}/files`, forceRefresh ? REVALIDATE_OPTIONS : {});
 	}
 
 	async fetchFileContent(owner: string, repo: string, path: string, ref: string): Promise<string> {
@@ -946,8 +954,8 @@ class GitHubAPI {
 		return map;
 	}
 
-	async fetchPRReviewComments(owner: string, repo: string, number: number): Promise<ReviewComment[]> {
-		const raw        = await this.fetchAllPages(`/repos/${owner}/${repo}/pulls/${number}/comments`);
+	async fetchPRReviewComments(owner: string, repo: string, number: number, forceRefresh = false): Promise<ReviewComment[]> {
+		const raw        = await this.fetchAllPages(`/repos/${owner}/${repo}/pulls/${number}/comments`, forceRefresh ? REVALIDATE_OPTIONS : {});
 		const threadMeta = await this.fetchReviewCommentThreadMeta(owner, repo, number);
 		return raw.map((c: any) => {
 			const meta = threadMeta.get(c.id);
@@ -992,8 +1000,8 @@ class GitHubAPI {
 		}
 	}
 
-	async fetchPRIssueComments(owner: string, repo: string, number: number): Promise<IssueComment[]> {
-		const raw = await this.fetchAllPages(`/repos/${owner}/${repo}/issues/${number}/comments`);
+	async fetchPRIssueComments(owner: string, repo: string, number: number, forceRefresh = false): Promise<IssueComment[]> {
+		const raw = await this.fetchAllPages(`/repos/${owner}/${repo}/issues/${number}/comments`, forceRefresh ? REVALIDATE_OPTIONS : {});
 		return raw.map((c: any) => ({
 			id         : c.id,
 			body       : c.body || '',

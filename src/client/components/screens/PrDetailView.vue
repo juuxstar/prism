@@ -15,8 +15,8 @@
 							:class="prStatusBadgeClass"
 							>{{ prStatusBadgeText }}</span>
 						<div class="pr-detail-header-title-block u-flex u-items-center u-min-w-0 u-flex-grow-1 u-gap-2">
-							<div class="pr-detail-title-edit-group u-flex u-items-center u-min-w-0 u-flex-1 u-gap-1">
-								<h1 class="pr-detail-title u-min-w-0 u-flex-1 u-fs-15 u-fw-600 u-text-primary u-truncate u-m-0">
+							<div class="pr-detail-title-edit-group u-flex u-items-center u-min-w-0 u-gap-1">
+								<h1 class="pr-detail-title u-min-w-0 u-fs-15 u-fw-600 u-text-primary u-truncate u-m-0">
 									{{ pr.title }}
 								</h1>
 								<button
@@ -57,7 +57,7 @@
 							v-if="cursorCheckoutHref && activeTab !== 'overview'"
 							:href="cursorCheckoutHref"
 							class="pr-detail-open-cursor-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-whitespace-nowrap"
-							:title="'Open ' + cursorCheckoutPath + ' in Cursor'"
+							:title="'Open ' + cursorTargetPath + ' in Cursor'"
 						>
 							<span class="u-flex u-items-center u-justify-center" aria-hidden="true" v-html="$icon('externalLink', 14)"></span>
 							<span>Open in Cursor</span>
@@ -65,14 +65,14 @@
 						<button
 							type="button"
 							class="pr-detail-header-refresh-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-cursor-pointer u-whitespace-nowrap"
-							:class="{ spinning : refreshingOverview }"
-							:disabled="refreshingOverview"
-							:title="refreshingOverview ? 'Refreshing pull request data' : 'Refresh pull request data'"
-							:aria-label="refreshingOverview ? 'Refreshing pull request data' : 'Refresh pull request data'"
-							@click="refreshOverview"
+							:class="{ spinning : refreshing }"
+							:disabled="refreshing"
+							:title="refreshing ? 'Refreshing pull request data' : 'Refresh pull request data'"
+							:aria-label="refreshing ? 'Refreshing pull request data' : 'Refresh pull request data'"
+							@click="refreshDetail"
 						>
 							<span class="u-flex u-items-center u-justify-center" aria-hidden="true" v-html="$icon('refresh', 14)"></span>
-							<span>{{ refreshingOverview ? 'Refreshing' : 'Refresh' }}</span>
+							<span>{{ refreshing ? 'Refreshing' : 'Refresh' }}</span>
 						</button>
 						<template v-if="pendingComments.length">
 							<button
@@ -247,7 +247,7 @@
 					title="Commit local changes"
 					title-id="local-commit-title"
 					dialog-class="pr-local-commit-modal"
-					:close-disabled="committingLocalChanges"
+					:close-disabled="committingLocalChanges || pushingLocalChanges"
 					:focus-on-open="false"
 					@close="closeLocalCommitModal"
 				>
@@ -257,17 +257,21 @@
 							v-model="localCommitMessage"
 							class="pr-local-commit-input u-fs-13"
 							rows="4"
-							:disabled="committingLocalChanges"
+							:disabled="committingLocalChanges || pushingLocalChanges"
 							@keydown.meta.enter.prevent="confirmLocalCommit"
 							@keydown.ctrl.enter.prevent="confirmLocalCommit"
 						></textarea>
 					</label>
 					<p v-if="localCommitError" class="pr-local-commit-error u-fs-13 u-mb-0">{{ localCommitError }}</p>
 					<div class="pr-merge-confirm-actions pr-local-commit-actions u-flex u-justify-end u-gap-2-5 u-flex-wrap">
-						<button type="button" class="btn btn-secondary" :disabled="committingLocalChanges" @click="closeLocalCommitModal">Cancel</button>
-						<button type="button" class="btn pr-merge-confirm-submit" :disabled="committingLocalChanges || !localCommitMessage.trim()" @click="confirmLocalCommit">
-							<span v-if="committingLocalChanges" class="async-loader"></span>
+						<button type="button" class="btn btn-secondary" :disabled="committingLocalChanges || pushingLocalChanges" @click="closeLocalCommitModal">Cancel</button>
+						<button type="button" class="btn btn-secondary" :disabled="localCommitActionDisabled" @click="confirmLocalCommit">
+							<span v-if="committingLocalChanges && !commitAndPushRequested" class="async-loader"></span>
 							<template v-else>Commit</template>
+						</button>
+						<button type="button" class="btn pr-merge-confirm-submit" :disabled="localCommitActionDisabled" @click="confirmLocalCommitAndPush">
+							<span v-if="committingLocalChanges && commitAndPushRequested" class="async-loader"></span>
+							<template v-else>Commit &amp; Push</template>
 						</button>
 					</div>
 				</pr-modal-dialog>
@@ -381,12 +385,13 @@ export default class PrDetailView extends Vue {
 	checkingOutPr                             = false;
 	committingLocalChanges                    = false;
 	pushingLocalChanges                       = false;
-	refreshingOverview                        = false;
+	refreshing                                = false;
 	checkoutError                             = '';
 	localGitError                             = '';
 	localCommitModalOpen                      = false;
 	localCommitMessage                        = '';
 	localCommitError                          = '';
+	commitAndPushRequested                    = false;
 	/** When set while the PR Files tab is shown, selects the diff file and focuses the comment thread there. Cleared after the tab handles it. */
 	pendingThreadFocus: null | { path: string; line: number; side: 'LEFT' | 'RIGHT'; nonce: number } = null;
 
@@ -546,14 +551,29 @@ export default class PrDetailView extends Vue {
 		return this.checkoutState?.hostPath || this.checkoutState?.path || '';
 	}
 
+	/** On the Local Files tab the button deep-links to the file being reviewed instead of just the checkout root. */
+	get cursorTargetPath(): string {
+		const root = this.cursorCheckoutPath;
+		if (!root || this.activeTab !== 'local-files') {
+			return root;
+		}
+		// A deleted file no longer exists on disk, so fall back to opening the checkout itself.
+		const file = this.localFiles[this.localFileIndex];
+		return !file || file.status === 'removed' ? root : `${root.replace(/\/+$/, '')}/${file.filename}`;
+	}
+
 	get cursorCheckoutHref(): string {
-		const path = this.cursorCheckoutPath;
+		const path = this.cursorTargetPath;
 		return path ? toCursorFileHref(path) : '';
 	}
 
 	/** Without a local checkout of the PR branch there can be no local file changes, so the Local Files tab is hidden. */
 	get hasLocalCheckout(): boolean {
 		return Boolean(this.checkoutState);
+	}
+
+	get localCommitActionDisabled(): boolean {
+		return this.committingLocalChanges || this.pushingLocalChanges || !this.localCommitMessage.trim();
 	}
 
 	get whitespaceOnlyUnviewedFiles(): PRFile[] {
@@ -689,7 +709,9 @@ export default class PrDetailView extends Vue {
 	private async refreshPrWhenTabVisible(): Promise<void> {
 		try {
 			const [ pr, decision ] = await Promise.all([
-				GitHubClient.fetchPRDetail(this.owner, this.repo, this.prNumber),
+				// Force refresh: without it GitHub's 60-second cache can return the pre-push head sha, and every
+				// diff read below is keyed off that sha, so the whole tab would refresh back to the old commit.
+				GitHubClient.fetchPRDetail(this.owner, this.repo, this.prNumber, true),
 				GitHubClient.fetchPullRequestReviewDecision(this.owner, this.repo, this.prNumber),
 			]);
 			this.pr             = pr;
@@ -734,7 +756,8 @@ export default class PrDetailView extends Vue {
 			void this.refreshCheckoutStatus();
 			void this.refreshLocalPrStatus();
 			if (this.activeTab === 'pr-files') {
-				this.loadFiles();
+				// The file list is already loaded at this point, so it needs forcing to pick up the merge.
+				this.loadFiles(true);
 			}
 			else if (this.activeTab === 'local-files') {
 				this.loadLocalFiles();
@@ -854,12 +877,16 @@ export default class PrDetailView extends Vue {
 		}
 	}
 
-	async refreshOverview(): Promise<void> {
-		if (this.refreshingOverview) {
+	/**
+	 * The header Refresh button. Reloads the pull request itself plus whatever the active tab is showing —
+	 * on PR Files that means re-reading the changed-file list and its diffs, not just the overview panels.
+	 */
+	async refreshDetail(): Promise<void> {
+		if (this.refreshing) {
 			return;
 		}
-		this.refreshingOverview = true;
-		this.error              = '';
+		this.refreshing = true;
+		this.error      = '';
 		GitHubClient.clearAsyncCaches();
 		try {
 			const [ pr, decision ] = await Promise.all([
@@ -883,19 +910,40 @@ export default class PrDetailView extends Vue {
 			await Promise.all([
 				this.loadChecks(),
 				this.loadRepoLabels(),
-				this.loadReviewComments(),
-				this.loadViewedState(),
+				this.loadReviewComments(true),
 				this.refreshCheckoutStatus(),
 				this.refreshLocalPrStatus(),
-				this.loadLocalFiles(),
+				...this.refreshActiveTabData(),
 			]);
 		}
 		catch (e: any) {
 			this.error = e.message || 'Failed to refresh PR';
 		}
 		finally {
-			this.refreshingOverview = false;
+			this.refreshing = false;
 		}
+	}
+
+	/**
+	 * Reloads for whichever tab is on screen, plus any other tab whose data is already loaded and would
+	 * otherwise go stale behind the user. loadFiles(true) refetches viewed state itself, so the standalone
+	 * viewed-state read is only needed when the file list is not being reloaded.
+	 */
+	private refreshActiveTabData(): Promise<unknown>[] {
+		const reloads: Promise<unknown>[] = [];
+		const reloadPrFiles               = this.activeTab === 'pr-files' || this.files.length > 0;
+		const reloadLocalFiles            = this.activeTab === 'local-files' || this.localFiles.length > 0;
+
+		if (reloadPrFiles) {
+			reloads.push(this.loadFiles(true));
+		}
+		else {
+			reloads.push(this.loadViewedState());
+		}
+		if (reloadLocalFiles) {
+			reloads.push(this.loadLocalFiles());
+		}
+		return reloads;
 	}
 
 	async loadChecks() {
@@ -979,8 +1027,12 @@ export default class PrDetailView extends Vue {
 		}
 	}
 
-	async loadFiles(): Promise<void> {
-		if (this.files.length) {
+	/**
+	 * Load the PR's changed-file list plus its viewed state. Already-loaded files are kept unless `force` is
+	 * set, which is what the Refresh button uses to pick up commits pushed since the tab was opened.
+	 */
+	async loadFiles(force = false): Promise<void> {
+		if (!force && this.files.length) {
 			return;
 		}
 		if (this._loadFilesPromise) {
@@ -989,13 +1041,18 @@ export default class PrDetailView extends Vue {
 		this.filesLoading      = true;
 		this._loadFilesPromise = (async () => {
 			try {
-				const fileList = await GitHubClient.fetchPRFiles(this.owner, this.repo, this.prNumber);
+				const fileList = await GitHubClient.fetchPRFiles(this.owner, this.repo, this.prNumber, force);
 				const result   = await GitHubClient.fetchPRFilesViewedState(this.owner, this.repo, this.prNumber);
 				this.applyViewedStateFromApi(fileList, result);
 				this.files = fileList;
 			}
-			catch {
-				this.files = [];
+			catch (e: any) {
+				// A failed refresh should leave the reader on the list they already had rather than
+				// emptying the tab; only an initial load has nothing worth keeping.
+				console.error('Failed to load PR files:', e);
+				if (!force) {
+					this.files = [];
+				}
 			}
 			finally {
 				this.filesLoading      = false;
@@ -1056,12 +1113,12 @@ export default class PrDetailView extends Vue {
 		return loadLocalViewedFiles({ owner : this.owner, repo : this.repo, prNumber : this.routeBackedPrNumber, headSha }, files);
 	}
 
-	async loadReviewComments() {
+	async loadReviewComments(force = false) {
 		this.reviewCommentsLoading = true;
 		try {
 			const [ rRev, rIss ] = await Promise.allSettled([
-				GitHubClient.fetchPRReviewComments(this.owner, this.repo, this.prNumber),
-				GitHubClient.fetchPRIssueComments(this.owner, this.repo, this.prNumber),
+				GitHubClient.fetchPRReviewComments(this.owner, this.repo, this.prNumber, force),
+				GitHubClient.fetchPRIssueComments(this.owner, this.repo, this.prNumber, force),
 			]);
 			this.reviewComments = rRev.status === 'fulfilled' ? rRev.value : [];
 			this.issueComments  = rIss.status === 'fulfilled' ? rIss.value : [];
@@ -1192,33 +1249,47 @@ export default class PrDetailView extends Vue {
 	}
 
 	openLocalCommitModal() {
-		this.localCommitMessage   = '';
-		this.localCommitError     = '';
-		this.localGitError        = '';
-		this.localCommitModalOpen = true;
+		this.localCommitMessage     = '';
+		this.localCommitError       = '';
+		this.localGitError          = '';
+		this.commitAndPushRequested = false;
+		this.localCommitModalOpen   = true;
 	}
 
 	closeLocalCommitModal() {
-		if (this.committingLocalChanges) {
+		if (this.committingLocalChanges || this.pushingLocalChanges) {
 			return;
 		}
-		this.localCommitModalOpen = false;
-		this.localCommitError     = '';
+		this.localCommitModalOpen   = false;
+		this.localCommitError       = '';
+		this.commitAndPushRequested = false;
 	}
 
 	async confirmLocalCommit() {
+		this.commitAndPushRequested = false;
+		await this.commitLocalChanges();
+	}
+
+	async confirmLocalCommitAndPush() {
+		this.commitAndPushRequested = true;
+		if (await this.commitLocalChanges()) {
+			await this.pushLocalChanges();
+		}
+	}
+
+	private async commitLocalChanges(): Promise<boolean> {
 		if (this.committingLocalChanges) {
-			return;
+			return false;
 		}
 		const target = checkoutTargetForPr(this.pr);
 		if (!target) {
 			this.localCommitError = 'Reload this pull request so branch details are available.';
-			return;
+			return false;
 		}
 		const message = this.localCommitMessage.trim();
 		if (!message) {
 			this.localCommitError = 'Commit message is required.';
-			return;
+			return false;
 		}
 		this.committingLocalChanges = true;
 		this.localCommitError       = '';
@@ -1229,10 +1300,12 @@ export default class PrDetailView extends Vue {
 			this.localFiles           = [];
 			this.localViewedFiles     = {};
 			await this.refreshCheckoutStatus();
+			return true;
 		}
 		catch (error: any) {
 			this.localCommitError = error.message || 'Could not commit local changes';
 			this.localGitError    = this.localCommitError;
+			return false;
 		}
 		finally {
 			this.committingLocalChanges = false;
@@ -1679,16 +1752,30 @@ html[data-color-scheme="light"] .pr-detail-header {
 }
 
 .pr-detail-header-icon-btn {
-	width: 28px;
+	width: 0;
 	height: 28px;
 	border: 1px solid var(--border);
+	border-color: transparent;
 	border-radius: var(--radius-sm);
 	background: var(--bg-primary);
 	color: var(--text-secondary);
+	overflow: hidden;
 	transition:
+		width var(--transition),
+		opacity var(--transition),
 		color var(--transition),
 		border-color var(--transition),
 		background var(--transition);
+	opacity: 0;
+	pointer-events: none;
+}
+
+.pr-detail-title-edit-group:hover .pr-detail-header-icon-btn,
+.pr-detail-header-icon-btn:focus-visible {
+	width: 28px;
+	border-color: var(--border);
+	opacity: 1;
+	pointer-events: auto;
 }
 
 .pr-detail-header-icon-btn:hover {

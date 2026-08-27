@@ -108,7 +108,9 @@ export default class App extends Vue {
 
 	private _rateLimitTimer: ReturnType<typeof setTimeout> | null = null;
 	private _checksTimer: ReturnType<typeof setTimeout> | null    = null;
-	private _checksPollDelay = CHECKS_POLL_BASE_MS;
+	private _checksPollDelay   = CHECKS_POLL_BASE_MS;
+	private _cardDataPending   = false;
+	private _worktreePrRequest = 0;
 	private _githubStatusTimer: ReturnType<typeof setInterval> | null = null;
 	private _githubStatusDismissedFingerprint: string | null          = null;
 	private _lastGithubStatusFingerprint: string                      = '';
@@ -350,8 +352,8 @@ export default class App extends Vue {
 			this.dataVersion++;
 			void this.refreshCheckoutStatus();
 			await this.fetchAndRenderBranches();
-			this.fetchAsyncData();
 			this.refreshGithubStatus();
+			await this.fetchAsyncData();
 		}
 		catch (error: any) {
 			const handled = await this.handleApiError(error);
@@ -404,17 +406,21 @@ export default class App extends Vue {
 		});
 	}
 
-	fetchAsyncData() {
-		GitHubClient.fetchPrCardData(this.getVisiblePRs())
+	fetchAsyncData(): Promise<void> {
+		this._cardDataPending = true;
+		return GitHubClient.fetchPrCardData(this.getVisiblePRs())
 			.then(() => {
 				this.dataVersion++;
-				// Card data backfills head/base refs, which worktree-to-PR matching needs.
-				void this.refreshWorktreePullRequests();
 				if (this.getPRsNeedingCheckRefresh().length > 0) {
 					this.startChecksPolling();
 				}
 			})
-			.catch(e => this.handleAsyncError(e));
+			.catch(e => this.handleAsyncError(e))
+			.finally(() => {
+				this._cardDataPending = false;
+				// Card data backfills the head/base refs that worktree-to-PR matching needs.
+				void this.refreshWorktreePullRequests();
+			});
 	}
 
 	// ── Checks polling ─────────────────────────────────────
@@ -510,9 +516,17 @@ export default class App extends Vue {
 	 * Worktrees panel is actually open.
 	 */
 	private async refreshWorktreePullRequests(): Promise<void> {
+		// Claim this run up front so a slower run already in flight cannot overwrite its result.
+		const request   = ++this._worktreePrRequest;
 		const checkouts = this.checkoutStatus?.checkouts || [];
 		if (this.currentTypeFilter !== 'worktrees' || !checkouts.length) {
 			this.worktreePRs = [];
+			return;
+		}
+
+		// Matching relies on head refs that arrive with the card data. Running before those land would treat
+		// every checkout as unmatched and spend search requests on a result the follow-up run discards.
+		if (this._cardDataPending) {
 			return;
 		}
 
@@ -523,10 +537,15 @@ export default class App extends Vue {
 		}
 
 		try {
-			this.worktreePRs = await GitHubClient.fetchWorktreePullRequests(unmatched);
+			const pullRequests = await GitHubClient.fetchWorktreePullRequests(unmatched);
+			if (request === this._worktreePrRequest) {
+				this.worktreePRs = pullRequests;
+			}
 		}
 		catch (error) {
-			this.worktreePRs = [];
+			if (request === this._worktreePrRequest) {
+				this.worktreePRs = [];
+			}
 			this.handleAsyncError(error);
 		}
 	}

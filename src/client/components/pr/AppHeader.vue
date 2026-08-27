@@ -84,6 +84,27 @@ html[data-color-scheme="light"] .header {
 	background: #e4e7ec;
 }
 
+/* Below the board's single-column breakpoint the header runs past the viewport, and #app clips it. */
+@media (max-width: 820px) {
+	.header {
+		flex-wrap: wrap;
+		gap: var(--u-2);
+	}
+
+	.header-left,
+	.header-right {
+		flex-wrap: wrap;
+		gap: var(--u-2);
+		min-width: 0;
+	}
+
+	.header-left .repo-select,
+	.header-left .type-filters,
+	.header-left .btn-refresh {
+		margin-left: 0;
+	}
+}
+
 .logo {
 	width: 36px;
 	height: 36px;

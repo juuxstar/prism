@@ -1,6 +1,6 @@
 <template>
 	<section class="screen">
-		<div v-if="!isDraftMode && !isWorktreesMode" class="pr-columns u-grid u-gap-4 u-py-4 u-px-6 u-m-auto u-w-full u-flex-1 u-min-h-0 u-content-stretch">
+		<div v-if="!isDraftMode && !isWorktreesMode" class="pr-columns u-grid u-gap-4 u-py-4 u-px-6 u-m-auto u-w-full u-flex-1 u-min-h-0">
 			<div class="pr-column pr-column-split">
 				<create-pr-section v-if="branches.length > 0" :branches="branches" @create-pr="$emit('create-pr', $event)" />
 				<div v-if="orderedOther.length" class="pr-subcolumn">
@@ -535,11 +535,29 @@ interface WorktreeRow {
 
 <style>
 .pr-columns {
-	grid-template-columns: repeat(3, 1fr);
-	grid-template-rows: 1fr;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	/* The row fills the viewport when the board is short and grows with the tallest column when it is not. */
+	grid-template-rows: minmax(min-content, 1fr);
+	align-content: start;
 	max-width: var(--content-max-width);
 	overflow-y: auto;
-	overscroll-behavior: contain;
+	/* `none` rather than `contain`: contain still rubber-bands this scroller at its own edges. */
+	overscroll-behavior: none;
+}
+
+/* Three columns need ~340px each to stay readable; below that, fold them into fewer. */
+@media (max-width: 1200px) {
+	.pr-columns {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		grid-template-rows: none;
+		grid-auto-rows: min-content;
+	}
+}
+
+@media (max-width: 820px) {
+	.pr-columns {
+		grid-template-columns: minmax(0, 1fr);
+	}
 }
 
 .drafts-view,
@@ -548,7 +566,7 @@ interface WorktreeRow {
 	min-height: 0;
 	max-width: var(--content-max-width);
 	overflow-y: auto;
-	overscroll-behavior: contain;
+	overscroll-behavior: none;
 }
 
 .drafts-column {
@@ -597,6 +615,12 @@ interface WorktreeRow {
 	grid-template-columns: minmax(260px, 1fr) minmax(460px, 640px);
 	align-items: center;
 	gap: var(--u-4);
+}
+
+@media (max-width: 820px) {
+	.worktree-row {
+		grid-template-columns: minmax(0, 1fr);
+	}
 }
 
 .worktree-workspace-path {
@@ -797,7 +821,6 @@ html[data-color-scheme="light"] .pr-column-header {
 	display: flex;
 	flex-direction: column;
 	align-self: start;
-	height: max-content;
 	gap: 0;
 	padding: 0;
 	background: none;
@@ -811,21 +834,8 @@ html[data-color-scheme="light"] .pr-column-header {
 	border-radius: var(--radius-md);
 	display: flex;
 	flex-direction: column;
+	flex: 0 0 auto;
 	min-height: 0;
-
-	&:first-child {
-		flex: 0 0 auto;
-	}
-
-	&:last-child {
-		flex: 1 1 0;
-
-		.pr-list {
-			flex: 1;
-			min-height: 0;
-			overflow-y: auto;
-		}
-	}
 
 	& + & {
 		margin-top: 16px;
@@ -833,39 +843,6 @@ html[data-color-scheme="light"] .pr-column-header {
 
 	.pr-column-header {
 		border-radius: var(--radius-md) var(--radius-md) 0 0;
-	}
-}
-
-.filters {
-	padding: var(--u-3) var(--u-6);
-	border-bottom: 1px solid var(--border);
-	background: var(--bg-secondary);
-	flex-shrink: 0;
-	position: sticky;
-	top: 57px;
-	z-index: 90;
-}
-
-.filters-inner {
-	max-width: var(--content-max-width);
-}
-
-.filter-btn {
-	padding: var(--u-1-5) var(--u-3-5);
-	border: none;
-	background: transparent;
-	color: var(--text-secondary);
-	font-size: 14px;
-	font-weight: 500;
-	border-radius: var(--radius-sm);
-	cursor: pointer;
-	transition: all var(--transition);
-	font-family: inherit;
-
-	&:hover,
-	&.active {
-		color: var(--text-primary);
-		background: var(--bg-tertiary);
 	}
 }
 </style>

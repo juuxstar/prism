@@ -34,9 +34,23 @@
 
 			<div class="cp-reply-section">
 				<textarea v-model="replyBody" class="cp-textarea" placeholder="Reply..." rows="2" @keydown.meta.enter="submitReply" @keydown.ctrl.enter="submitReply"></textarea>
-				<div class="cp-actions u-flex u-justify-end u-gap-1-5 u-mt-1-5">
-					<button class="cp-btn cp-btn-primary" :disabled="!replyBody.trim() || replySubmitting" @click="submitReply">
+				<div class="cp-actions u-flex u-items-center u-justify-end u-gap-2 u-mt-1-5">
+					<button
+						class="pr-detail-compact-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-py-0-5 u-px-2-5 u-fs-11 u-fw-600 u-cursor-pointer"
+						:disabled="!replyBody.trim() || replySubmitting"
+						@click="submitReply"
+					>
 						{{ replySubmitting ? "Sending..." : "Reply" }}
+					</button>
+					<button
+						v-if="resolvableThreadNodeId"
+						class="pr-detail-compact-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-py-0-5 u-px-2-5 u-fs-11 u-fw-600 u-cursor-pointer"
+						:disabled="resolveSubmitting"
+						:title="threadIsResolved ? 'Mark this review thread as open again' : 'Mark this review thread as resolved'"
+						@click="toggleThreadResolved"
+					>
+						<span v-if="resolveSubmitting" class="async-loader"></span>
+						<template v-else>{{ threadIsResolved ? "Unresolve" : "Resolve" }}</template>
 					</button>
 				</div>
 			</div>
@@ -114,6 +128,7 @@ export default class CommentPopover extends Vue {
 	editType: CommentType     = 'suggestion';
 	replyBody                 = '';
 	replySubmitting           = false;
+	resolveSubmitting         = false;
 	applyingId: string | null = null;
 
 	readonly commentTypes = [
@@ -130,6 +145,14 @@ export default class CommentPopover extends Vue {
 		const left   = Math.max(8, this.anchorRect.left - 100);
 		const maxTop = window.innerHeight - 350;
 		return { position : 'fixed', top : `${Math.min(top, maxTop)}px`, left : `${left}px`, zIndex : '200' };
+	}
+
+	get resolvableThreadNodeId(): string | null {
+		return this.thread ? this.thread.comments.find(comment => comment.threadNodeId)?.threadNodeId ?? null : null;
+	}
+
+	get threadIsResolved(): boolean {
+		return !!this.thread && !this.thread.comments.some(comment => comment.isResolved === false);
 	}
 
 	@Watch('pendingComment', { immediate : true })
@@ -222,6 +245,24 @@ export default class CommentPopover extends Vue {
 		}
 		finally {
 			this.replySubmitting = false;
+		}
+	}
+
+	async toggleThreadResolved() {
+		const threadNodeId = this.resolvableThreadNodeId;
+		if (!threadNodeId || this.resolveSubmitting) {
+			return;
+		}
+		this.resolveSubmitting = true;
+		try {
+			await GitHubClient.setReviewThreadResolved(threadNodeId, !this.threadIsResolved);
+			this.$emit('comments-updated');
+		}
+		catch {
+			/* Keep the popover open so the action can be retried. */
+		}
+		finally {
+			this.resolveSubmitting = false;
 		}
 	}
 

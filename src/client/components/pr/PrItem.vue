@@ -336,8 +336,16 @@ export default class PrItem extends Vue {
 	color: var(--accent-orange);
 }
 
+/* A PR with 20+ checks would otherwise push a horizontal scrollbar onto the whole board. */
+.pr-status-row,
+.pr-checks {
+	flex-wrap: wrap;
+	row-gap: var(--u-1);
+}
+
 .pr-bot-comments {
 	gap: 3px;
+	flex-wrap: wrap;
 }
 
 .bot-icon-high {
