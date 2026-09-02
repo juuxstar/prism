@@ -6,6 +6,8 @@
  * text-character positions.
  */
 
+import { diffSequences } from '@/lib/diff/myers';
+
 export interface CharRange {
 	start: number;
 	end: number;
@@ -17,8 +19,7 @@ export function tokenize(text: string): string[] {
 }
 
 /**
- * Shortest-edit-script via Myers' O(ND) algorithm on token arrays.
- * Returns parallel arrays of character ranges that changed in oldText / newText.
+ * Diffs two strings token by token and returns the character ranges that changed in each.
  */
 export function computeInlineHighlights(oldText: string, newText: string): { oldRanges: CharRange[]; newRanges: CharRange[] } {
 	const oldToks = tokenize(oldText);
@@ -37,75 +38,7 @@ export function computeInlineHighlights(oldText: string, newText: string): { old
 		return { oldRanges : [ { start : 0, end : oldText.length } ], newRanges : [] };
 	}
 
-	const max   = n + m;
-	const vSize = 2 * max + 1;
-	const v     = new Int32Array(vSize);
-	v.fill(-1);
-	const offset  = max;
-	v[offset + 1] = 0;
-
-	const trace: Int32Array[] = [];
-
-	outer: for (let d = 0; d <= max; d++) {
-		const snap = new Int32Array(vSize);
-		snap.set(v);
-		trace.push(snap);
-
-		for (let k = -d; k <= d; k += 2) {
-			let x: number;
-			x     = k === -d || (k !== d && v[offset + k - 1] < v[offset + k + 1]) ? v[offset + k + 1] : v[offset + k - 1] + 1;
-			let y = x - k;
-			while (x < n && y < m && oldToks[x] === newToks[y]) {
-				x++;
-				y++;
-			}
-			v[offset + k] = x;
-			if (x >= n && y >= m) {
-				break outer;
-			}
-		}
-	}
-
-	const edits: { type: 'keep' | 'del' | 'add'; oldIdx?: number; newIdx?: number }[] = [];
-	let cx = n;
-	let cy = m;
-
-	for (let d = trace.length - 1; d > 0; d--) {
-		const prev  = trace[d];
-		const k     = cx - cy;
-		const prevK = k === -d || (k !== d && prev[offset + k - 1] < prev[offset + k + 1]) ? k + 1 : k - 1;
-		const prevX = prev[offset + prevK];
-		const prevY = prevX - prevK;
-
-		while (cx > prevX && cy > prevY) {
-			cx--;
-			cy--;
-			edits.push({ type : 'keep', oldIdx : cx, newIdx : cy });
-		}
-		if (cx > prevX) {
-			cx--;
-			edits.push({ type : 'del', oldIdx : cx });
-		}
-		else if (cy > prevY) {
-			cy--;
-			edits.push({ type : 'add', newIdx : cy });
-		}
-	}
-	while (cx > 0 && cy > 0) {
-		cx--;
-		cy--;
-		edits.push({ type : 'keep', oldIdx : cx, newIdx : cy });
-	}
-	while (cx > 0) {
-		cx--;
-		edits.push({ type : 'del', oldIdx : cx });
-	}
-	while (cy > 0) {
-		cy--;
-		edits.push({ type : 'add', newIdx : cy });
-	}
-
-	edits.reverse();
+	const edits = diffSequences(oldToks, newToks);
 
 	const oldOffsets = cumulativeOffsets(oldToks);
 	const newOffsets = cumulativeOffsets(newToks);

@@ -38,7 +38,15 @@
 		</div>
 
 		<template v-else-if="files.length">
-			<pr-files-nav-bar v-model:current-index="currentIndex" :files="files" :viewed-files="viewedFiles" :show-viewed-controls="viewedEnabled" @toggle-viewed="toggleViewed" />
+			<pr-files-nav-bar
+				v-model:current-index="currentIndex"
+				v-model:render-markdown="renderMarkdown"
+				:files="files"
+				:viewed-files="viewedFiles"
+				:show-viewed-controls="viewedEnabled"
+				:show-render-toggle="canRenderMarkdown"
+				@toggle-viewed="toggleViewed"
+			/>
 
 			<div v-if="contentLoading" class="pr-diff-content-loading"><span class="async-loader"></span> Loading file contents...</div>
 
@@ -54,6 +62,10 @@
 					left-label="Before"
 					right-label="After"
 				/>
+			</div>
+
+			<div v-else-if="showRenderedMarkdown" class="pr-diff-viewer" :class="{ 'pr-diff-viewer-split' : !isAddedOrRemoved }">
+				<pr-markdown-diff :left-source="markdownLeftSource" :right-source="markdownRightSource" />
 			</div>
 
 			<div v-else-if="isAddedMarkdownFile" class="pr-diff-viewer pr-diff-viewer-split">
@@ -193,6 +205,7 @@
 import DiffMinimap                            from '@/components/pr/DiffMinimap.vue';
 import PrDiffTable                            from '@/components/pr/PrDiffTable.vue';
 import PrFilesNavBar                          from '@/components/pr/PrFilesNavBar.vue';
+import PrMarkdownDiff                         from '@/components/pr/PrMarkdownDiff.vue';
 import PrMediaViewer                          from '@/components/pr/PrMediaViewer.vue';
 import type { PendingComment, PRFile, ReviewComment } from '@/lib/api/githubClient';
 import GitHubClient                           from '@/lib/api/githubClient';
@@ -215,7 +228,7 @@ export interface PrFileContent {
 export type PrFileContentLoader = (file: PRFile) => Promise<PrFileContent>;
 
 @Component({
-	components : { DiffMinimap, PrDiffTable, PrFilesNavBar, PrMediaViewer },
+	components : { DiffMinimap, PrDiffTable, PrFilesNavBar, PrMarkdownDiff, PrMediaViewer },
 	emits      : [ 'update:fileIndex', 'update:viewed', 'all-viewed', 'add-pending', 'remove-pending', 'edit-pending', 'comments-updated', 'thread-focus-handled' ],
 })
 export default class PrFilesTab extends Vue {
@@ -254,6 +267,8 @@ export default class PrFilesTab extends Vue {
 	viewportHeight                     = 0;
 	lineHeight                         = 16.8;
 	virtualScrollTop                   = 0;
+	/** Sticky across files, so a reviewer reading a set of docs stays in whichever view they chose. */
+	renderMarkdown                     = false;
 
 	activeComment: { path: string; line: number; side: 'LEFT' | 'RIGHT'; rect: DOMRect; lineContent: string } | null = null;
 
@@ -364,6 +379,27 @@ export default class PrFilesTab extends Vue {
 
 	get isAddedOrRemoved(): boolean {
 		return this.currentFile?.status === 'added' || this.currentFile?.status === 'removed';
+	}
+
+	get isMarkdownFile(): boolean {
+		return /\.(md|markdown)$/i.test(this.currentFile?.filename ?? '');
+	}
+
+	/** The rendered view needs whole files, not just the patch, so the toggle waits for the contents. */
+	get canRenderMarkdown(): boolean {
+		return this.isMarkdownFile && this.hasFullContent;
+	}
+
+	get showRenderedMarkdown(): boolean {
+		return this.canRenderMarkdown && this.renderMarkdown;
+	}
+
+	get markdownLeftSource(): string | null {
+		return this.currentFile?.status === 'added' ? null : this.baseContent;
+	}
+
+	get markdownRightSource(): string | null {
+		return this.currentFile?.status === 'removed' ? null : this.headContent;
 	}
 
 	get isAddedMarkdownFile(): boolean {

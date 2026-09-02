@@ -3,7 +3,16 @@ import type { CommonBlock } from '@/lib/diff/prDiffTypes';
 
 import { computed, type Ref } from 'vue';
 
-export { buildConnectorPaths, buildScrollSegments, buildScrollSegmentsFromState, maxVirtualScrollTop, resolveScroll } from '@/lib/diff/diffVirtualScroll';
+export {
+	buildConnectorPaths,
+	buildConnectorPathsFromPixels,
+	buildMeasuredGeometry,
+	buildScrollSegments,
+	buildScrollSegmentsFromState,
+	maxVirtualScrollTop,
+	resolveScroll,
+	resolveScrollProportional
+} from '@/lib/diff/diffVirtualScroll';
 
 /**
  * Composition API helper for synced virtual scroll + connector paths.

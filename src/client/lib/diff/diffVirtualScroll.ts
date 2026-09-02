@@ -70,6 +70,30 @@ export function resolveScroll(segments: ScrollSegment[], v: number): { left: num
 	return { left : leftAcc, right : rightAcc };
 }
 
+/**
+ * Like `resolveScroll`, but advances both panes proportionally through a segment rather than letting the
+ * shorter side run out and wait. Rendered blocks routinely differ in height between the two sides, and
+ * tracking proportionally keeps the midpoint of a corresponding pair on both panes' centre line the whole
+ * way through it.
+ */
+export function resolveScrollProportional(segments: ScrollSegment[], v: number): { left: number; right: number } {
+	let virtualAcc = 0;
+	let leftAcc    = 0;
+	let rightAcc   = 0;
+
+	for (const seg of segments) {
+		if (virtualAcc + seg.virtualLength > v) {
+			const progress = seg.virtualLength <= 0 ? 0 : (v - virtualAcc) / seg.virtualLength;
+			return { left : leftAcc + seg.leftLength * progress, right : rightAcc + seg.rightLength * progress };
+		}
+		virtualAcc += seg.virtualLength;
+		leftAcc    += seg.leftLength;
+		rightAcc   += seg.rightLength;
+	}
+
+	return { left : leftAcc, right : rightAcc };
+}
+
 export function maxVirtualScrollTop(segments: ScrollSegment[], viewportHeight: number, lineHeight: number): number {
 	const totalVH    = segments.reduce((s, seg) => s + seg.virtualLength, 0);
 	const overscroll = Math.max(0, viewportHeight - lineHeight);
@@ -80,24 +104,84 @@ export function buildConnectorPaths(commonBlocks: CommonBlock[], leftScrollTop: 
 	if (!viewportHeight || !commonBlocks.length) {
 		return [];
 	}
-	const lh              = lineHeight;
-	const h               = viewportHeight;
+	const ribbons: PixelBlock[] = commonBlocks.map(block => ({
+		leftTop     : (block.leftStart - 1) * lineHeight,
+		leftBottom  : block.leftEnd * lineHeight,
+		rightTop    : (block.rightStart - 1) * lineHeight,
+		rightBottom : block.rightEnd * lineHeight,
+	}));
+	return buildConnectorPathsFromPixels(ribbons, leftScrollTop, rightScrollTop, viewportHeight, width);
+}
+
+/**
+ * The connector ribbons, for panes whose corresponding regions are already known in pixels rather than as
+ * line ranges — which is how the rendered markdown diff measures its blocks.
+ */
+export function buildConnectorPathsFromPixels(ribbons: PixelBlock[], leftScrollTop: number, rightScrollTop: number, viewportHeight: number, width: number): string[] {
+	if (!viewportHeight || !ribbons.length) {
+		return [];
+	}
 	const paths: string[] = [];
 
-	for (const block of commonBlocks) {
-		const lTop = (block.leftStart - 1) * lh - leftScrollTop;
-		const lBot = block.leftEnd * lh - leftScrollTop;
-		const rTop = (block.rightStart - 1) * lh - rightScrollTop;
-		const rBot = block.rightEnd * lh - rightScrollTop;
+	for (const ribbon of ribbons) {
+		const lTop = ribbon.leftTop - leftScrollTop;
+		const lBot = ribbon.leftBottom - leftScrollTop;
+		const rTop = ribbon.rightTop - rightScrollTop;
+		const rBot = ribbon.rightBottom - rightScrollTop;
 
 		if (lBot < 0 && rBot < 0) {
 			continue;
 		}
-		if (lTop > h && rTop > h) {
+		if (lTop > viewportHeight && rTop > viewportHeight) {
 			continue;
 		}
 
 		paths.push(`M 0 ${lTop} L ${width} ${rTop} L ${width} ${rBot} L 0 ${lBot} Z`);
 	}
 	return paths;
+}
+
+/**
+ * Scroll segments and connector ribbons for panes built from measured rows instead of uniform lines. A row
+ * is one pair of corresponding regions; a row with a zero-height side exists on one side only.
+ */
+export function buildMeasuredGeometry(rows: MeasuredRow[]): { segments: ScrollSegment[]; ribbons: PixelBlock[] } {
+	const segments: ScrollSegment[] = [];
+	const ribbons: PixelBlock[]     = [];
+	let leftPos                     = 0;
+	let rightPos                    = 0;
+
+	for (const row of rows) {
+		segments.push({
+			virtualLength : Math.max(row.leftHeight, row.rightHeight),
+			leftLength    : row.leftHeight,
+			rightLength   : row.rightHeight,
+		});
+		if (row.linked && row.leftHeight > 0 && row.rightHeight > 0) {
+			ribbons.push({
+				leftTop     : leftPos,
+				leftBottom  : leftPos + row.leftHeight,
+				rightTop    : rightPos,
+				rightBottom : rightPos + row.rightHeight,
+			});
+		}
+		leftPos  += row.leftHeight;
+		rightPos += row.rightHeight;
+	}
+
+	return { segments, ribbons };
+}
+
+export interface PixelBlock {
+	leftTop: number;
+	leftBottom: number;
+	rightTop: number;
+	rightBottom: number;
+}
+
+export interface MeasuredRow {
+	leftHeight: number;
+	rightHeight: number;
+	/** Whether the two sides correspond, and so earn a connector ribbon between them. */
+	linked: boolean;
 }

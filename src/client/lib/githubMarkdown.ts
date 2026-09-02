@@ -28,10 +28,14 @@ function ensureExternalLinkAttrs(): void {
 /** Renders GitHub-flavored markdown to sanitized HTML for `v-html`. */
 export function renderGithubMarkdown(markdown: string): string {
 	const src = markdown.trim();
-	if (!src) {
-		return '';
-	}
+	return !src ? '' : sanitizeMarkdownHtml(marked.parse(src, { async : false }) as string);
+}
+
+/**
+ * Sanitizes markdown-derived HTML, for callers that drive `marked` themselves — the rendered diff parses
+ * block by block. Keeps one DOMPurify configuration, so external links behave the same everywhere.
+ */
+export function sanitizeMarkdownHtml(html: string): string {
 	ensureExternalLinkAttrs();
-	const raw = marked.parse(src, { async : false }) as string;
-	return DOMPurify.sanitize(raw);
+	return DOMPurify.sanitize(html);
 }

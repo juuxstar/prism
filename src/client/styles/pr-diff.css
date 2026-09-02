@@ -511,3 +511,73 @@ mark.wd-add {
 	background: var(--accent-purple);
 	box-shadow: 4px -4px 0 0 var(--accent-orange);
 }
+
+/* --- Rendered markdown diff ---------------------------------------------------------------------- */
+
+.pr-md-diff-split {
+	display: flex;
+}
+
+.pr-md-diff-panel {
+	/* Vertical position is driven by the stack's transform, so the pane itself must never scroll. */
+	overflow-y: hidden;
+	overflow-x: auto;
+}
+
+.pr-md-diff-single {
+	overflow: auto;
+}
+
+.pr-md-stack {
+	will-change: transform;
+}
+
+.pr-md-block {
+	position: relative;
+	padding: 6px 16px 6px 46px;
+	border-left: 3px solid transparent;
+}
+
+.pr-md-block-lines {
+	position: absolute;
+	top: 8px;
+	left: 6px;
+	width: 30px;
+	text-align: right;
+	color: var(--text-tertiary);
+	opacity: 0.5;
+	user-select: none;
+}
+
+.pr-md-block-body {
+	color: var(--text-secondary);
+	font-size: 14px;
+	line-height: 1.6;
+	word-wrap: break-word;
+}
+
+/* A block's last child would otherwise push the pane's measured height past what it draws. */
+.pr-md-block-body > :last-child {
+	margin-bottom: 0;
+}
+
+.pr-md-diff-panel-left .pr-md-block-changed,
+.pr-md-diff-panel-left .pr-md-block-removed,
+.pr-md-stack-del .pr-md-block-removed {
+	background: var(--diff-del-bg);
+	border-left-color: var(--accent-red);
+}
+
+.pr-md-diff-panel-right .pr-md-block-changed,
+.pr-md-diff-panel-right .pr-md-block-added,
+.pr-md-stack-add .pr-md-block-added {
+	background: var(--diff-add-bg);
+	border-left-color: var(--accent-green);
+}
+
+/* Blocks with no counterpart read as a gap on the other side, so they are called out more strongly. */
+.pr-md-diff-panel-left .pr-md-block-removed,
+.pr-md-diff-panel-right .pr-md-block-added {
+	border-left-style: solid;
+	border-left-width: 5px;
+}

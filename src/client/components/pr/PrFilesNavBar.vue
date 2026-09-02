@@ -69,6 +69,28 @@
 		>
 			&raquo;
 		</button>
+		<div v-if="showRenderToggle" class="pr-files-render-toggle u-flex u-flex-shrink-0" role="group" aria-label="Markdown diff view">
+			<button
+				type="button"
+				class="pr-files-render-btn has-tooltip"
+				:class="{ active : !renderMarkdown }"
+				:aria-pressed="!renderMarkdown"
+				data-tooltip="Diff the markdown source"
+				@click="renderMarkdown = false"
+			>
+				Source
+			</button>
+			<button
+				type="button"
+				class="pr-files-render-btn has-tooltip"
+				:class="{ active : renderMarkdown }"
+				:aria-pressed="renderMarkdown"
+				data-tooltip="Diff the rendered markdown"
+				@click="renderMarkdown = true"
+			>
+				Rendered
+			</button>
+		</div>
 		<span class="pr-files-nav-counter u-text-tertiary u-whitespace-nowrap u-flex-shrink-0">{{ currentIndex + 1 }}/{{ files.length }}</span>
 		<span class="pr-files-nav-stats u-flex u-gap-1-5 u-font-mono u-whitespace-nowrap u-flex-shrink-0">
 			<span class="pr-files-nav-add">+{{ currentFile.additions }}</span>
@@ -88,9 +110,12 @@ const props = defineProps<{
 	files: PRFile[];
 	viewedFiles: Record<string, string>;
 	showViewedControls?: boolean;
+	/** Whether the current file can be shown rendered — markdown whose full contents loaded. */
+	showRenderToggle?: boolean;
 }>();
 
-const currentIndex = defineModel<number>('currentIndex', { required : true });
+const currentIndex   = defineModel<number>('currentIndex', { required : true });
+const renderMarkdown = defineModel<boolean>('renderMarkdown', { default : false });
 
 const emit = defineEmits<{ toggleViewed: [] }>();
 
@@ -253,6 +278,37 @@ onBeforeUnmount(() => {
 	background: var(--bg-secondary);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
+}
+
+.pr-files-render-toggle {
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	overflow: hidden;
+}
+
+.pr-files-render-btn {
+	height: 30px;
+	padding: 0 10px;
+	border: none;
+	background: var(--bg-primary);
+	color: var(--text-secondary);
+	cursor: pointer;
+	font-family: inherit;
+	font-size: 12px;
+	white-space: nowrap;
+}
+
+.pr-files-render-btn + .pr-files-render-btn {
+	border-left: 1px solid var(--border);
+}
+
+.pr-files-render-btn:hover:not(.active) {
+	background: var(--bg-tertiary);
+}
+
+.pr-files-render-btn.active {
+	background: var(--accent-blue);
+	color: #fff;
 }
 
 .pr-files-nav-btn {
