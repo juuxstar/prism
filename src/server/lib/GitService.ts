@@ -167,7 +167,7 @@ export class GitService {
 
 		const env = gitEnv(checkout);
 		await runGit(checkout.path, [ 'check-ref-format', '--branch', checkout.label ], env);
-		await runGit(checkout.path, [ 'fetch', '--no-tags', 'origin', 'dev' ], gitEnvWithGithubAuth(checkout, this.authorization));
+		await fetchRemoteBranch(checkout, 'origin', 'dev', this.authorization);
 		await runGit(checkout.path, [ 'rev-parse', '--verify', 'origin/dev^{commit}' ], env);
 
 		const branchRef = `refs/heads/${checkout.label}`;
@@ -195,7 +195,8 @@ export class GitService {
 			throw new BadRequestError('Choose a worktree on a named branch');
 		}
 
-		await runGit(checkout.path, [ 'pull', '--ff-only', 'origin', checkout.branch ], gitEnvWithGithubAuth(checkout, this.authorization));
+		await fetchRemoteBranch(checkout, 'origin', checkout.branch, this.authorization);
+		await runGit(checkout.path, [ 'merge', '--ff-only', `origin/${checkout.branch}` ], gitEnv(checkout));
 		return this.serializeGitWorkspaceStatus(await this.detectGitWorkspace());
 	}
 
@@ -476,6 +477,22 @@ async function fetchGithubUserForGitIdentity(token: string): Promise<{ name: str
 		? user.email.trim()
 		: `${user.id || login}+${login}@users.noreply.github.com`;
 	return { name, email };
+}
+
+/**
+ * Fetch one branch from a named remote, going through an authenticated HTTPS URL rather than the remote
+ * itself: the PRism container ships git without an ssh client, so a git@github.com remote cannot be
+ * reached at all. The refspec still updates the remote-tracking ref so origin/<branch> stays usable.
+ */
+async function fetchRemoteBranch(checkout: GitCheckout, remote: string, branch: string, authorization: unknown): Promise<void> {
+	const url    = await tryRunGit(checkout.path, [ 'remote', 'get-url', remote ], gitEnv(checkout));
+	const repo   = url ? normalizeGithubRepo(url) : null;
+	const source = repo ? `https://github.com/${repo}.git` : remote;
+	await runGit(
+		checkout.path,
+		[ 'fetch', '--no-tags', source, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}` ],
+		gitEnvWithGithubAuth(checkout, authorization)
+	);
 }
 
 async function runGit(cwd: string, args: string[], env: NodeJS.ProcessEnv | undefined, options: GitRunBufferOptions): Promise<Buffer>;

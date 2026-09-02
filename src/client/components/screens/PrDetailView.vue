@@ -53,6 +53,18 @@
 						</button>
 					</div>
 					<div class="pr-detail-header-right u-flex u-items-center u-gap-3 u-flex-1 u-justify-end">
+						<button
+							type="button"
+							class="pr-detail-pin-btn u-inline-flex u-items-center u-justify-center u-cursor-pointer"
+							:class="{ pinned : prPinned }"
+							:title="prPinned ? 'Unpin this pull request from the header' : 'Pin this pull request to the header'"
+							:aria-label="prPinned ? 'Unpin pull request #' + routeBackedPrNumber + ' from the header' : 'Pin pull request #' + routeBackedPrNumber + ' to the header'"
+							:aria-pressed="prPinned"
+							@click="toggleCurrentPrPin"
+						>
+							<span class="u-flex u-items-center u-justify-center" aria-hidden="true" v-html="$icon('pin', 14)"></span>
+						</button>
+						<pinned-pr-bar align="right" :async-version="pinnedChecksVersion" @open-pr="openPinnedPr" />
 						<a
 							v-if="cursorCheckoutHref && activeTab !== 'overview'"
 							:href="cursorCheckoutHref"
@@ -198,6 +210,7 @@
 					:pr-number="routeBackedPrNumber"
 					:base-ref="pr.base.ref"
 					:unmet-requirements="mergeConfirmUnmetRequirements"
+					:restore-worktree-label="worktreeToRestoreOnMerge?.label || ''"
 					:merging="mergingPr"
 					@close="closeMergeConfirm"
 					@confirm="confirmMergePr"
@@ -281,6 +294,7 @@
 </template>
 
 <script lang="ts">
+import PinnedPrBar                    from '@/components/pr/PinnedPrBar.vue';
 import PrCloseConfirmModal            from '@/components/pr/PrCloseConfirmModal.vue';
 import PrDetailLoadState              from '@/components/pr/PrDetailLoadState.vue';
 import PrDetailTabBar                 from '@/components/pr/PrDetailTabBar.vue';
@@ -294,13 +308,15 @@ import { clearToken, getStoredToken } from '@/lib/api/auth';
 import type { GitWorkspaceStatus, LocalPrStatus, PullRequestCheckoutState } from '@/lib/api/gitCheckoutClient';
 import {
 	checkoutPullRequestBranch, checkoutStateForPr, checkoutTargetForPr, commitLocalPullRequestChanges, fetchGitWorkspaceStatus,
-	fetchLocalPullRequestFileContent, fetchLocalPullRequestFiles, fetchLocalPullRequestStatus, pushLocalPullRequestChanges
+	fetchLocalPullRequestFileContent, fetchLocalPullRequestFiles, fetchLocalPullRequestStatus, pushLocalPullRequestChanges,
+	resetWorktreeToNaturalBranch
 } from '@/lib/api/gitCheckoutClient';
 import type { AsyncMergeResult, CheckRunDetail, IssueComment, PendingComment, PRFile, RepoLabel, ReviewComment } from '@/lib/api/githubClient';
 import GitHubClient                             from '@/lib/api/githubClient';
 import { isWhitespaceOnlyFileChange }           from '@/lib/diff/patchDiff';
 import { loadLocalViewedFiles, setLocalFileViewed } from '@/lib/localViewedFiles';
 import { loadPendingReview, savePendingReview } from '@/lib/pendingReviewStorage';
+import { isPinned, syncPinnedPr, togglePinnedPr } from '@/lib/pinnedPrs';
 import type { ResolvedScheme }                  from '@/lib/theme/colorScheme';
 import { getResolvedScheme, subscribeColorScheme } from '@/lib/theme/colorScheme';
 import { getDiffFontSize, getDiffTabSize, setDiffFontSize, setDiffTabSize, subscribeDiffSettings }               from '@/lib/theme/diffSettings';
@@ -319,11 +335,12 @@ type PrDetailTab = 'overview' | 'local-files' | 'pr-files';
 		PrErrorModal,
 		PrMergeConfirmModal,
 		PrModalDialog,
+		PinnedPrBar,
 		SettingsPopup,
 		PrTitleEditModal,
 		PrWhitespaceViewedModal,
 	},
-	emits : [ 'update:fileIndex', 'close', 'logout' ],
+	emits : [ 'update:fileIndex', 'close', 'logout', 'open-pr' ],
 })
 export default class PrDetailView extends Vue {
 
@@ -386,12 +403,14 @@ export default class PrDetailView extends Vue {
 	committingLocalChanges                    = false;
 	pushingLocalChanges                       = false;
 	refreshing                                = false;
-	checkoutError                             = '';
-	localGitError                             = '';
-	localCommitModalOpen                      = false;
-	localCommitMessage                        = '';
-	localCommitError                          = '';
-	commitAndPushRequested                    = false;
+	/** Bumped whenever this view drops the shared caches, so the pinned strip refills instead of blanking out. */
+	pinnedChecksVersion    = 0;
+	checkoutError          = '';
+	localGitError          = '';
+	localCommitModalOpen   = false;
+	localCommitMessage     = '';
+	localCommitError       = '';
+	commitAndPushRequested = false;
 	/** When set while the PR Files tab is shown, selects the diff file and focuses the comment thread there. Cleared after the tab handles it. */
 	pendingThreadFocus: null | { path: string; line: number; side: 'LEFT' | 'RIGHT'; nonce: number } = null;
 
@@ -716,6 +735,7 @@ export default class PrDetailView extends Vue {
 			]);
 			this.pr             = pr;
 			this.reviewDecision = decision;
+			syncPinnedPr(pr);
 			void this.refreshCheckoutStatus();
 			void this.refreshLocalPrStatus();
 			document.title = `#${this.routeBackedPrNumber} ${this.pr.title}`;
@@ -729,6 +749,32 @@ export default class PrDetailView extends Vue {
 		return new Promise(resolve => setTimeout(resolve, ms));
 	}
 
+	/** A worktree parked on the PR branch is free again once merged, so it goes back to its directory-named branch. */
+	get worktreeToRestoreOnMerge(): PullRequestCheckoutState | null {
+		const checkout = this.checkoutState;
+		return !checkout || checkout.isMain || checkout.branch === checkout.label ? null : checkout;
+	}
+
+	/** Merging retires the PR branch, so hand the worktree back to its own branch at the latest origin/dev. */
+	private async restoreWorktreeAfterMerge(): Promise<void> {
+		const checkout = this.worktreeToRestoreOnMerge;
+		if (!checkout) {
+			return;
+		}
+		try {
+			this.checkoutStatus = await resetWorktreeToNaturalBranch(checkout.path);
+		}
+		catch (error: any) {
+			this.checkoutError = `Merged, but ${checkout.label} could not be restored: ${error.message || 'reset failed'}`;
+		}
+	}
+
+	/** Restore before reloading so the reloaded checkout status already reflects the freed worktree. */
+	private async completeMerge(mergedPr?: any): Promise<void> {
+		await this.restoreWorktreeAfterMerge();
+		await this.refreshMergedPullRequest(mergedPr);
+	}
+
 	/** Reload PR + related data without the full-page loading overlay (e.g. after merge completes). */
 	private async refreshMergedPullRequest(mergedPr?: any): Promise<void> {
 		try {
@@ -738,8 +784,9 @@ export default class PrDetailView extends Vue {
 			]);
 			this.pr             = pr;
 			this.reviewDecision = decision;
-			document.title      = `#${this.routeBackedPrNumber} ${this.pr.title}`;
-			const headSha       = pr.head?.sha;
+			syncPinnedPr(pr);
+			document.title = `#${this.routeBackedPrNumber} ${this.pr.title}`;
+			const headSha  = pr.head?.sha;
 			if (headSha) {
 				const restored       = loadPendingReview(this.owner, this.repo, this.prNumber, headSha);
 				this.pendingComments = restored ?? [];
@@ -777,7 +824,7 @@ export default class PrDetailView extends Vue {
 					return;
 				}
 				if (detail.merged) {
-					await this.refreshMergedPullRequest(detail);
+					await this.completeMerge(detail);
 					return;
 				}
 			}
@@ -794,7 +841,7 @@ export default class PrDetailView extends Vue {
 	/** Apply a definitive result from GitHub's async-merge endpoint. Returns true for a terminal result. */
 	private async handleAsyncMergeResult(result: AsyncMergeResult): Promise<boolean> {
 		if (result.status === 'merged') {
-			await this.refreshMergedPullRequest({
+			await this.completeMerge({
 				...this.pr,
 				merged    : true,
 				merged_at : this.pr?.merged_at || new Date().toISOString(),
@@ -843,8 +890,9 @@ export default class PrDetailView extends Vue {
 			]);
 			this.pr             = pr;
 			this.reviewDecision = decision;
-			document.title      = `#${this.routeBackedPrNumber} ${this.pr.title}`;
-			const headSha       = pr.head?.sha;
+			syncPinnedPr(pr);
+			document.title = `#${this.routeBackedPrNumber} ${this.pr.title}`;
+			const headSha  = pr.head?.sha;
 			if (headSha) {
 				const restored       = loadPendingReview(this.owner, this.repo, this.prNumber, headSha);
 				this.pendingComments = restored ?? [];
@@ -888,6 +936,7 @@ export default class PrDetailView extends Vue {
 		this.refreshing = true;
 		this.error      = '';
 		GitHubClient.clearAsyncCaches();
+		this.pinnedChecksVersion++;
 		try {
 			const [ pr, decision ] = await Promise.all([
 				GitHubClient.fetchPRDetail(this.owner, this.repo, this.prNumber),
@@ -895,8 +944,9 @@ export default class PrDetailView extends Vue {
 			]);
 			this.pr             = pr;
 			this.reviewDecision = decision;
-			document.title      = `#${this.routeBackedPrNumber} ${this.pr.title}`;
-			const headSha       = pr.head?.sha;
+			syncPinnedPr(pr);
+			document.title = `#${this.routeBackedPrNumber} ${this.pr.title}`;
+			const headSha  = pr.head?.sha;
 			if (headSha) {
 				const restored       = loadPendingReview(this.owner, this.repo, this.prNumber, headSha);
 				this.pendingComments = restored ?? [];
@@ -1336,6 +1386,29 @@ export default class PrDetailView extends Vue {
 		finally {
 			this.pushingLocalChanges = false;
 		}
+	}
+
+	/**
+	 * A pinned chip navigates to that PR. Embedded in the dashboard's slide-over the host owns which PR is
+	 * shown, so hand it up; standalone, this is a route change the view's own `prRouteKey` watcher picks up.
+	 */
+	get prPinned(): boolean {
+		return Boolean(this.pr) && isPinned(this.pr.id);
+	}
+
+	toggleCurrentPrPin() {
+		if (!this.pr) {
+			return;
+		}
+		togglePinnedPr({ id : this.pr.id, owner : this.owner, repo : this.repo, number : this.routeBackedPrNumber, title : this.pr.title });
+	}
+
+	openPinnedPr(target: { owner: string; repo: string; number: number }) {
+		if (this.embedded) {
+			this.$emit('open-pr', target);
+			return;
+		}
+		void this.$router.push(`/pull-request/${target.owner}/${target.repo}/${target.number}`);
 	}
 
 	onAllFilesViewed() {
@@ -1781,6 +1854,31 @@ html[data-color-scheme="light"] .pr-detail-header {
 .pr-detail-header-icon-btn:hover {
 	color: var(--text-primary);
 	border-color: var(--text-tertiary);
+}
+
+.pr-detail-pin-btn {
+	width: 30px;
+	min-height: 30px;
+	padding: 0;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--bg-primary);
+	color: var(--text-secondary);
+	transition:
+		color var(--transition),
+		border-color var(--transition),
+		background var(--transition);
+}
+
+.pr-detail-pin-btn:hover {
+	color: var(--text-primary);
+	border-color: var(--text-tertiary);
+}
+
+.pr-detail-pin-btn.pinned {
+	border-color: var(--accent-blue);
+	background: var(--chip-blue-bg);
+	color: var(--accent-blue);
 }
 
 .pr-detail-header-refresh-btn {

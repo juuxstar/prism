@@ -22,6 +22,7 @@
 			></button>
 		</div>
 		<div class="header-right u-flex u-items-center u-gap-3">
+			<pinned-pr-bar v-if="user" align="right" :async-version="asyncVersion" @open-pr="$emit('open-pr', $event)" />
 			<select class="repo-select u-fs-13 u-truncate" :value="selectedTeam" @change="onTeamChange">
 				<option value="alpha">Alpha Team</option>
 				<option value="beta">Beta Team</option>
@@ -33,13 +34,17 @@
 </template>
 
 <script lang="ts">
+import PinnedPrBar   from '@/components/pr/PinnedPrBar.vue';
 import SettingsPopup from '@/components/pr/SettingsPopup.vue';
 import { iconSvg }   from '@/lib/icons';
 
 import { Component, Prop, Vue } from 'vue-facing-decorator';
 
-/** Top navigation bar with repo/team selectors, type filters, refresh, and user info. */
-@Component({ components : { SettingsPopup }, emits : [ 'set-type-filter', 'set-repo', 'set-team', 'refresh', 'logout' ] })
+/** Top navigation bar with repo/team selectors, type filters, pinned PRs, refresh, and user info. */
+@Component({
+	components : { PinnedPrBar, SettingsPopup },
+	emits      : [ 'set-type-filter', 'set-repo', 'set-team', 'refresh', 'logout', 'open-pr' ],
+})
 export default class AppHeader extends Vue {
 
 	@Prop({ required : true }) readonly user!: Record<string, unknown> | null;
@@ -48,6 +53,8 @@ export default class AppHeader extends Vue {
 	@Prop({ required : true }) readonly currentTypeFilter!: string;
 	@Prop({ required : true }) readonly selectedTeam!: string;
 	@Prop({ required : true }) readonly refreshing!: boolean;
+	/** Board data counter — lets the pinned strip pick up check state the board already refreshed. */
+	@Prop({ default : 0 }) readonly asyncVersion!: number;
 
 	get refreshBtnHtml(): string {
 		return iconSvg('refresh', 14);

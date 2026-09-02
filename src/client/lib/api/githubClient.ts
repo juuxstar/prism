@@ -20,7 +20,7 @@ const REVALIDATE_OPTIONS = { cache : 'no-cache' as RequestCache, headers : { 'Ca
 const CHECK_ROLLUP_SELECTION = `
 	commits(last: 1) {
 		nodes { commit { statusCheckRollup { contexts(first: ${CHECK_CONTEXT_LIMIT}) {
-			nodes { ... on CheckRun { conclusion status } ... on StatusContext { state } }
+			nodes { ... on CheckRun { conclusion status startedAt completedAt } ... on StatusContext { state createdAt } }
 		} } } }
 	}
 `;
@@ -48,6 +48,18 @@ const PR_CARD_FRAGMENT = `
 /** Poll-sized subset of PR_CARD_FRAGMENT — check state is the only thing that moves while a board sits open. */
 const PR_CHECKS_FRAGMENT = `
 	fragment PrCardFields on PullRequest {
+		${CHECK_ROLLUP_SELECTION}
+	}
+`;
+
+/**
+ * The pinned strip's poll. It follows PRs no board on screen is listing, so alongside the rollup it reads the
+ * little of the pull request itself that decides whether the pin should still be there at all.
+ */
+const PINNED_PR_FRAGMENT = `
+	fragment PrCardFields on PullRequest {
+		title
+		merged
 		${CHECK_ROLLUP_SELECTION}
 	}
 `;
@@ -434,9 +446,8 @@ class GitHubAPI {
 		for (const batch of chunk(prs, PR_CARD_BATCH_SIZE)) {
 			const nodes = await this.fetchPullRequestNodes(batch, PR_CHECKS_FRAGMENT);
 			for (const { pr, node } of nodes) {
-				const checks   = checksSummaryFromPullRequest(node);
-				const previous = this.checksCache.get(pr.id);
-				if (!previous || previous.passed !== checks.passed || previous.failed !== checks.failed || previous.pending !== checks.pending) {
+				const checks = checksSummaryFromPullRequest(node);
+				if (checksSummariesDiffer(this.checksCache.get(pr.id), checks)) {
 					changed = true;
 				}
 				this.checksCache.set(pr.id, checks);
@@ -444,6 +455,36 @@ class GitHubAPI {
 		}
 
 		return changed;
+	}
+
+	/**
+	 * The pinned strip's poll, for pull requests the current view never listed — it follows PRs across repos and
+	 * across the board/detail split. Shares `refreshChecks`' batching and cache, keyed by the same PR id, and
+	 * additionally reports each PR's title and whether it has been merged.
+	 */
+	async refreshPinnedPullRequests(targets: PullRequestTarget[]): Promise<PinnedPullRequestState[]> {
+		const prs = targets.map(target => ({
+			id             : target.id,
+			number         : target.number,
+			repository_url : `https://api.github.com/repos/${target.owner}/${target.repo}`,
+		}));
+
+		const states: PinnedPullRequestState[] = [];
+		for (const batch of chunk(prs, PR_CARD_BATCH_SIZE)) {
+			const nodes = await this.fetchPullRequestNodes(batch, PINNED_PR_FRAGMENT);
+			for (const { pr, node } of nodes) {
+				const checks = checksSummaryFromPullRequest(node);
+				states.push({
+					id            : pr.id,
+					title         : node.title || '',
+					merged        : Boolean(node.merged),
+					checksChanged : checksSummariesDiffer(this.checksCache.get(pr.id), checks),
+				});
+				this.checksCache.set(pr.id, checks);
+			}
+		}
+
+		return states;
 	}
 
 	/**
@@ -1176,10 +1217,11 @@ function mergeabilityFromGraphql(mergeable: string | null | undefined): PRMergea
 }
 
 function checksSummaryFromPullRequest(node: any): ChecksSummary {
-	const contexts = node?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes || [];
-	const summary  = { passed : 0, failed : 0, pending : 0 };
+	const contexts               = node?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes || [];
+	const summary: ChecksSummary = { passed : 0, failed : 0, pending : 0, updatedAt : null };
 
 	for (const context of contexts) {
+		summary.updatedAt = latestTimestamp(summary.updatedAt, context.completedAt, context.startedAt, context.createdAt);
 		if (context.conclusion) {
 			if ([ 'SUCCESS', 'NEUTRAL', 'SKIPPED' ].includes(context.conclusion)) {
 				summary.passed++;
@@ -1208,6 +1250,25 @@ function checksSummaryFromPullRequest(node: any): ChecksSummary {
 	}
 
 	return summary;
+}
+
+/** Whether a freshly read rollup moved at all, so a caller can back its polling off while nothing changes. */
+function checksSummariesDiffer(previous: ChecksSummary | undefined, next: ChecksSummary): boolean {
+	return !previous || previous.passed !== next.passed || previous.failed !== next.failed || previous.pending !== next.pending;
+}
+
+/** Newest of the timestamps a check rollup context can carry; ignores the nulls that queued checks report. */
+function latestTimestamp(...values: (string | null | undefined)[]): string | null {
+	let latest                = 0;
+	let result: string | null = null;
+	for (const value of values) {
+		const time = value ? Date.parse(value) : NaN;
+		if (Number.isFinite(time) && time > latest) {
+			latest = time;
+			result = value!;
+		}
+	}
+	return result;
 }
 
 function botCountsFromReviewThreads(threads: any[] | undefined): BotCounts {
@@ -1364,10 +1425,27 @@ export interface AccessibleRepo {
 	ownerType: string;
 }
 
+export interface PullRequestTarget {
+	id: number;
+	owner: string;
+	repo: string;
+	number: number;
+}
+
+export interface PinnedPullRequestState {
+	id: number;
+	title: string;
+	merged: boolean;
+	/** True when this poll's rollup differs from the one it replaced. */
+	checksChanged: boolean;
+}
+
 export interface ChecksSummary {
 	passed: number;
 	failed: number;
 	pending: number;
+	/** When any check in the rollup last moved, so a summary can say how stale it is. Null when none reported one. */
+	updatedAt: string | null;
 }
 
 export interface BranchInfo {

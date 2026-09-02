@@ -6,11 +6,13 @@
 		:current-type-filter="currentTypeFilter"
 		:selected-team="selectedTeam"
 		:refreshing="refreshing"
+		:async-version="dataVersion"
 		@set-type-filter="setTypeFilter"
 		@set-repo="setRepo"
 		@set-team="setTeam"
 		@refresh="handleRefresh"
 		@logout="handleLogout"
+		@open-pr="openPrOverlay"
 	/>
 	<github-status-banner
 		v-if="currentScreen === 'pr'"
@@ -54,6 +56,7 @@
 				embedded
 				@close="closePrOverlay"
 				@logout="handleLogout"
+				@open-pr="openPrOverlay"
 			/>
 		</div>
 	</Transition>
