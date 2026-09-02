@@ -754,7 +754,7 @@ class GitHubAPI {
 
 	async fetchFileContent(owner: string, repo: string, path: string, ref: string): Promise<string> {
 		const data = await this.apiFetch(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`);
-		return atob(data.content.replace(/\n/g, ''));
+		return utf8FromBase64(data.content.replace(/\n/g, ''));
 	}
 
 	async fetchFileContentBase64(owner: string, repo: string, path: string, ref: string): Promise<string> {
@@ -1115,6 +1115,19 @@ class GitHubAPI {
 
 export const GitHubClient = new GitHubAPI();
 export default GitHubClient;
+
+/**
+ * Decodes a base64 payload as UTF-8 text. `atob` alone returns one character per *byte*, so anything
+ * outside ASCII — an em dash, an accent, an emoji — arrives as mojibake rather than the character.
+ */
+function utf8FromBase64(base64: string): string {
+	const binary = atob(base64);
+	const bytes  = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) {
+		bytes[i] = binary.charCodeAt(i);
+	}
+	return new TextDecoder().decode(bytes);
+}
 
 async function readZipTextFile(archive: ArrayBuffer, fileName: string): Promise<string> {
 	const bytes = new Uint8Array(archive);
