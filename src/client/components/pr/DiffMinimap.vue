@@ -44,6 +44,12 @@ export default class DiffMinimap extends Vue {
 	private _resizeObserver: ResizeObserver | null = null;
 	private _unsubScheme: (() => void) | null      = null;
 
+	// Bound in `mounted`, where `this` is the live component. A class-field arrow is built on the throwaway
+	// instance the decorator constructs to harvest field initializers, so reading state through its `this`
+	// returns whatever the field was initialized to; only method calls reach the live component from there.
+	private _onDragMove: ((e: MouseEvent) => void) | null = null;
+	private _onDragEnd: (() => void) | null               = null;
+
 	get viewportFraction(): number {
 		return this.totalContentHeight <= 0 ? 1 : Math.min(1, this.viewportHeight / this.totalContentHeight);
 	}
@@ -64,6 +70,8 @@ export default class DiffMinimap extends Vue {
 	}
 
 	mounted() {
+		this._onDragMove     = (e: MouseEvent) => this.onDragMove(e);
+		this._onDragEnd      = () => this.onDragEnd();
 		this._resizeObserver = new ResizeObserver(() => {
 			this.updateContainerHeight();
 			this.draw();
@@ -86,8 +94,7 @@ export default class DiffMinimap extends Vue {
 		this._resizeObserver?.disconnect();
 		this._unsubScheme?.();
 		this._unsubScheme = null;
-		document.removeEventListener('mousemove', this._onDragMove);
-		document.removeEventListener('mouseup', this._onDragEnd);
+		this.detachDragListeners();
 	}
 
 	@Watch('lines')
@@ -205,22 +212,32 @@ export default class DiffMinimap extends Vue {
 		this.dragging = true;
 		this.hoverY   = -1;
 		this.emitScrollFromEvent(e);
-		document.addEventListener('mousemove', this._onDragMove);
-		document.addEventListener('mouseup', this._onDragEnd);
+		if (this._onDragMove && this._onDragEnd) {
+			document.addEventListener('mousemove', this._onDragMove);
+			document.addEventListener('mouseup', this._onDragEnd);
+		}
 	}
 
-	private _onDragMove = (e: MouseEvent) => {
+	private onDragMove(e: MouseEvent) {
 		if (!this.dragging) {
 			return;
 		}
 		this.emitScrollFromEvent(e);
-	};
+	}
 
-	private _onDragEnd = () => {
+	private onDragEnd() {
 		this.dragging = false;
-		document.removeEventListener('mousemove', this._onDragMove);
-		document.removeEventListener('mouseup', this._onDragEnd);
-	};
+		this.detachDragListeners();
+	}
+
+	private detachDragListeners() {
+		if (this._onDragMove) {
+			document.removeEventListener('mousemove', this._onDragMove);
+		}
+		if (this._onDragEnd) {
+			document.removeEventListener('mouseup', this._onDragEnd);
+		}
+	}
 
 	emitScrollFromEvent(e: MouseEvent) {
 		const container = this.$refs.container as HTMLElement;
