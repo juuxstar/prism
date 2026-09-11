@@ -581,3 +581,19 @@ mark.wd-add {
 	border-left-style: solid;
 	border-left-width: 5px;
 }
+
+/* Find-in-file: painted through the CSS Custom Highlight API, so the syntax-highlighted DOM is never touched. */
+::highlight(prism-file-search) {
+	background-color: var(--search-match-bg);
+}
+
+::highlight(prism-file-search-current) {
+	background-color: var(--search-match-current-bg);
+	color: var(--search-match-current-fg);
+}
+
+/* Fallback for browsers without the Highlight API: mark the row the search landed on. */
+.pr-search-current-row {
+	outline: 2px solid var(--search-match-current-bg);
+	outline-offset: -2px;
+}

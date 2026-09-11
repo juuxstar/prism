@@ -65,7 +65,7 @@
 			</div>
 
 			<div v-else-if="showRenderedMarkdown" class="pr-diff-viewer" :class="{ 'pr-diff-viewer-split' : !isAddedOrRemoved }">
-				<pr-markdown-diff :left-source="markdownLeftSource" :right-source="markdownRightSource" />
+				<pr-markdown-diff ref="markdownDiff" :left-source="markdownLeftSource" :right-source="markdownRightSource" />
 			</div>
 
 			<div v-else-if="isAddedMarkdownFile" class="pr-diff-viewer pr-diff-viewer-split">
@@ -179,6 +179,24 @@
 
 		<p v-else class="pr-files-empty">{{ emptyMessage }}</p>
 
+		<pr-file-search-bar
+			v-if="searchOpen"
+			ref="searchBar"
+			v-model:query="searchQuery"
+			v-model:match-case="searchMatchCase"
+			v-model:whole-word="searchWholeWord"
+			v-model:regex="searchRegex"
+			class="pr-files-search-overlay u-absolute"
+			:match-count="searchMatchCount"
+			:match-position="searchMatchPosition"
+			:invalid-pattern="searchInvalidPattern"
+			:truncated="searchTruncated"
+			:pending="searchPending"
+			@next="stepSearchMatch(1)"
+			@previous="stepSearchMatch(-1)"
+			@close="closeSearch"
+		/>
+
 		<comment-popover
 			v-if="reviewEnabled && activeComment"
 			:thread="activeThread"
@@ -204,6 +222,7 @@
 <script lang="ts">
 import DiffMinimap                            from '@/components/pr/DiffMinimap.vue';
 import PrDiffTable                            from '@/components/pr/PrDiffTable.vue';
+import PrFileSearchBar                        from '@/components/pr/PrFileSearchBar.vue';
 import PrFilesNavBar                          from '@/components/pr/PrFilesNavBar.vue';
 import PrMarkdownDiff                         from '@/components/pr/PrMarkdownDiff.vue';
 import PrMediaViewer                          from '@/components/pr/PrMediaViewer.vue';
@@ -212,12 +231,19 @@ import GitHubClient                           from '@/lib/api/githubClient';
 import { parseCommentType }                   from '@/lib/api/githubClient';
 import { buildConnectorPaths, buildScrollSegmentsFromState, maxVirtualScrollTop, resolveScroll } from '@/lib/api/usePrDiffVirtualScroll';
 import { buildSplitLinesForFile, parsePatch } from '@/lib/diff/diffLineBuilder';
-import { computeCommonBlocks }                from '@/lib/diff/patchDiff';
+import type { FileSearchMatch }               from '@/lib/diff/fileSearch';
+import {
+	clearSearchMatches, paintSearchMatches, scrollMatchIntoViewHorizontally, searchFileView, supportsSearchPainting
+} from '@/lib/diff/fileSearch';
+import { computeCommonBlocks }                         from '@/lib/diff/patchDiff';
 import type { CommentThread, DiffLine, ScrollSegment } from '@/lib/diff/prDiffTypes';
-import { renderGithubMarkdown }               from '@/lib/githubMarkdown';
+import { renderGithubMarkdown }                        from '@/lib/githubMarkdown';
 import { base64ToDataUrl, isRenderableMediaPaths, mediaMimeType } from '@/lib/mediaFiles';
 
 import { Component, Prop, Vue, Watch } from 'vue-facing-decorator';
+
+/** How long typing has to pause before the search runs, so the view does not chase every keystroke. */
+const SEARCH_DEBOUNCE_MS = 250;
 
 export interface ReviewThreadFocusRequest { path: string; line: number; side: 'LEFT' | 'RIGHT'; nonce: number }
 export interface PrFileContent {
@@ -228,7 +254,7 @@ export interface PrFileContent {
 export type PrFileContentLoader = (file: PRFile) => Promise<PrFileContent>;
 
 @Component({
-	components : { DiffMinimap, PrDiffTable, PrFilesNavBar, PrMarkdownDiff, PrMediaViewer },
+	components : { DiffMinimap, PrDiffTable, PrFileSearchBar, PrFilesNavBar, PrMarkdownDiff, PrMediaViewer },
 	emits      : [ 'update:fileIndex', 'update:viewed', 'all-viewed', 'add-pending', 'remove-pending', 'edit-pending', 'comments-updated', 'thread-focus-handled' ],
 })
 export default class PrFilesTab extends Vue {
@@ -270,6 +296,19 @@ export default class PrFilesTab extends Vue {
 	/** Sticky across files, so a reviewer reading a set of docs stays in whichever view they chose. */
 	renderMarkdown                     = false;
 
+	searchOpen           = false;
+	/** Kept when the bar closes, so re-opening offers the last query the way a browser's find does. */
+	searchQuery          = '';
+	searchMatchCase      = false;
+	searchWholeWord      = false;
+	searchRegex          = false;
+	searchMatchCount     = 0;
+	searchMatchIndex     = 0;
+	searchInvalidPattern = false;
+	searchTruncated      = false;
+	/** Typing has outrun the last search — the counts on screen describe an older query. */
+	searchPending        = false;
+
 	activeComment: { path: string; line: number; side: 'LEFT' | 'RIGHT'; rect: DOMRect; lineContent: string } | null = null;
 
 	private _contentCache = new Map<string, PrFileContent>();
@@ -278,6 +317,19 @@ export default class PrFilesTab extends Vue {
 		this.measureViewportHeight();
 		this.applyVirtualScroll();
 	};
+
+	private _searchMatches: FileSearchMatch[]    = [];
+	private _searchMarkedRow: HTMLElement | null = null;
+	private _searchScrollToken                   = 0;
+	private _searchScrolling                     = false;
+	private _searchRefreshQueued                 = false;
+	private _searchQueryTimer: ReturnType<typeof setTimeout> | null = null;
+
+	// Bound in `mounted`, where `this` is the live component. A class-field arrow is built on the throwaway
+	// instance the decorator constructs to harvest field initializers, so reading state through its `this`
+	// returns whatever the field was initialized to; only method calls reach the live component from there.
+	private _searchKeyHandler: ((e: KeyboardEvent) => void) | null = null;
+	private _popoverClickOutside: ((e: MouseEvent) => void) | null = null;
 
 	get currentFile(): PRFile {
 		return this.files[this.currentIndex] || this.files[0];
@@ -841,6 +893,9 @@ export default class PrFilesTab extends Vue {
 
 	mounted() {
 		window.addEventListener('resize', this._resizeHandler);
+		this._searchKeyHandler    = (e: KeyboardEvent) => this.onSearchKeydown(e);
+		this._popoverClickOutside = (e: MouseEvent) => this.onPopoverClickOutside(e);
+		window.addEventListener('keydown', this._searchKeyHandler);
 		document.addEventListener('mousedown', this._popoverClickOutside, true);
 		if (this.files.length) {
 			this.loadFileContent();
@@ -849,7 +904,17 @@ export default class PrFilesTab extends Vue {
 
 	beforeUnmount() {
 		window.removeEventListener('resize', this._resizeHandler);
-		document.removeEventListener('mousedown', this._popoverClickOutside, true);
+		if (this._searchKeyHandler) {
+			window.removeEventListener('keydown', this._searchKeyHandler);
+			this._searchKeyHandler = null;
+		}
+		if (this._popoverClickOutside) {
+			document.removeEventListener('mousedown', this._popoverClickOutside, true);
+			this._popoverClickOutside = null;
+		}
+		this.cancelPendingQuerySearch();
+		// The highlight registry is document-wide, so leaving the tab has to take the paint with it.
+		clearSearchMatches();
 	}
 
 	async loadFileContent() {
@@ -970,6 +1035,10 @@ export default class PrFilesTab extends Vue {
 	private async revealFirstChangeAfterLoad(file: PRFile, loadId: number, token: number): Promise<void> {
 		await this.settleDiffLayout();
 		if (token !== this._firstChangeRevealToken || loadId !== this._loadId || file.filename !== this.currentFile?.filename || this.threadFocusRequest) {
+			return;
+		}
+		// A running search has already put the view on a match; jumping to the first change would undo it.
+		if (this.searchOwnsScroll) {
 			return;
 		}
 
@@ -1239,7 +1308,236 @@ export default class PrFilesTab extends Vue {
 		this.$emit('comments-updated');
 	}
 
-	private _popoverClickOutside = (e: MouseEvent) => {
+	/** 1-based position of the highlighted match, or 0 when there is nothing highlighted. */
+	get searchMatchPosition(): number {
+		return this.searchMatchCount ? this.searchMatchIndex + 1 : 0;
+	}
+
+	/** True while the viewer is the transform-driven split, where nothing can be reached with `scrollIntoView`. */
+	get usesVirtualSplitScroll(): boolean {
+		if (!this.hasFullContent || this.isAddedOrRemoved || this.showRenderedMarkdown || this.viewportHeight <= 10) {
+			return false;
+		}
+		return maxVirtualScrollTop(this.scrollSegments(), this.viewportHeight, this.lineHeight) > 0;
+	}
+
+	/** While a search is running it, and not the freshly loaded file, decides where the view sits. */
+	get searchOwnsScroll(): boolean {
+		return this.searchOpen && !!this.searchQuery;
+	}
+
+	/** The toggles are deliberate single clicks rather than a stream of keystrokes, so they apply at once. */
+	get searchOptionsSignature(): string {
+		return JSON.stringify([ this.searchMatchCase, this.searchWholeWord, this.searchRegex ]);
+	}
+
+	/** Anything that re-renders the viewer detaches the collected ranges, so they have to be gathered again. */
+	get searchContentSignature(): string {
+		return [ this.currentIndex, this.contentLoading, this.showRenderedMarkdown, this.hasFullContent, this.files.length ].join('|');
+	}
+
+	@Watch('searchQuery')
+	onSearchQueryChanged() {
+		// An emptied field has nothing to scroll to, and leaving the old query painted would be a lie.
+		if (!this.searchQuery) {
+			this.cancelPendingQuerySearch();
+			this.refreshSearch({ resetIndex : true, scroll : false });
+			return;
+		}
+		this.cancelPendingQuerySearch();
+		this.searchPending     = true;
+		this._searchQueryTimer = setTimeout(() => {
+			this._searchQueryTimer = null;
+			this.refreshSearch({ resetIndex : true, scroll : true });
+		}, SEARCH_DEBOUNCE_MS);
+	}
+
+	@Watch('searchOptionsSignature')
+	onSearchOptionsChanged() {
+		this.cancelPendingQuerySearch();
+		this.refreshSearch({ resetIndex : true, scroll : true });
+	}
+
+	@Watch('searchContentSignature')
+	onSearchContentSignatureChanged() {
+		if (this.searchOpen) {
+			this.scheduleSearchRefresh();
+		}
+	}
+
+	private onSearchKeydown(e: KeyboardEvent) {
+		if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 'f' || e.key === 'F')) {
+			e.preventDefault();
+			this.openSearch();
+			return;
+		}
+		if (!this.searchOpen) {
+			return;
+		}
+		if ((e.metaKey || e.ctrlKey) && (e.key === 'g' || e.key === 'G')) {
+			e.preventDefault();
+			this.stepSearchMatch(e.shiftKey ? -1 : 1);
+			return;
+		}
+		// The comment popover closes on Escape too, and it is the thing the reader just opened.
+		if (e.key === 'Escape' && !this.activeComment) {
+			e.preventDefault();
+			this.closeSearch();
+		}
+	}
+
+	openSearch() {
+		if (this.searchOpen) {
+			this.focusSearchInput();
+			return;
+		}
+		this.searchOpen = true;
+		void this.$nextTick(() => {
+			this.focusSearchInput();
+			this.refreshSearch({ resetIndex : true, scroll : true });
+		});
+	}
+
+	closeSearch() {
+		this.searchOpen           = false;
+		this._searchMatches       = [];
+		this.searchMatchCount     = 0;
+		this.searchMatchIndex     = 0;
+		this.searchInvalidPattern = false;
+		this.searchTruncated      = false;
+		this.searchPending        = false;
+		this.cancelPendingQuerySearch();
+		clearSearchMatches();
+		this.clearSearchRowMark();
+	}
+
+	private cancelPendingQuerySearch() {
+		if (this._searchQueryTimer !== null) {
+			clearTimeout(this._searchQueryTimer);
+			this._searchQueryTimer = null;
+		}
+	}
+
+	stepSearchMatch(delta: number) {
+		// Typing and hitting Enter straight away should land on the first match, not skip over it.
+		if (this._searchQueryTimer !== null) {
+			this.cancelPendingQuerySearch();
+			this.refreshSearch({ resetIndex : true, scroll : true });
+			return;
+		}
+		if (!this.searchMatchCount) {
+			return;
+		}
+		this.searchMatchIndex = (this.searchMatchIndex + delta + this.searchMatchCount) % this.searchMatchCount;
+		paintSearchMatches(this._searchMatches, this.searchMatchIndex);
+		void this.scrollToCurrentMatch();
+	}
+
+	private focusSearchInput() {
+		(this.$refs.searchBar as { focusQuery?: () => void } | undefined)?.focusQuery?.();
+	}
+
+	/** Re-collects after the viewer has re-rendered and settled, which is when the new rows can be measured. */
+	private scheduleSearchRefresh() {
+		if (this._searchRefreshQueued) {
+			return;
+		}
+		this._searchRefreshQueued = true;
+		this.cancelPendingQuerySearch();
+		void (async () => {
+			await this.settleDiffLayout();
+			this._searchRefreshQueued = false;
+			if (this.searchOpen) {
+				this.refreshSearch({ resetIndex : true, scroll : true });
+			}
+		})();
+	}
+
+	private refreshSearch(options: { resetIndex: boolean; scroll: boolean }) {
+		this.searchPending = false;
+		const root         = this.searchOpen ? (this.$el as HTMLElement | null)?.querySelector('.pr-diff-viewer') as HTMLElement | null : null;
+		const settings     = { matchCase : this.searchMatchCase, regex : this.searchRegex, wholeWord : this.searchWholeWord };
+		const result       = root && this.searchQuery
+			? searchFileView(root, this.searchQuery, settings)
+			: { invalidPattern : false, matches : [] as FileSearchMatch[], truncated : false };
+
+		this._searchMatches       = result.matches;
+		this.searchMatchCount     = result.matches.length;
+		this.searchInvalidPattern = result.invalidPattern;
+		this.searchTruncated      = result.truncated;
+		this.searchMatchIndex     = options.resetIndex ? 0 : Math.min(this.searchMatchIndex, Math.max(0, result.matches.length - 1));
+
+		paintSearchMatches(this._searchMatches, this.searchMatchIndex);
+		this.clearSearchRowMark();
+
+		if (options.scroll && this.searchMatchCount) {
+			void this.scrollToCurrentMatch();
+		}
+	}
+
+	/**
+	 * Walks the view to the current match, one at a time. Reaching a line in the split diff takes a search
+	 * over several frames, so holding Enter down would otherwise have several of those driving the same
+	 * scroll position at once; a later request instead waits and is picked up when the running one lands.
+	 */
+	private async scrollToCurrentMatch(): Promise<void> {
+		this._searchScrollToken++;
+		if (this._searchScrolling) {
+			return;
+		}
+
+		this._searchScrolling = true;
+		try {
+			let served = -1;
+			while (served !== this._searchScrollToken) {
+				served      = this._searchScrollToken;
+				const match = this._searchMatches[this.searchMatchIndex];
+				if (!match) {
+					return;
+				}
+				await this.revealSearchMatch(match);
+			}
+		}
+		finally {
+			this._searchScrolling = false;
+		}
+	}
+
+	private async revealSearchMatch(match: FileSearchMatch): Promise<void> {
+		if (this.usesVirtualSplitScroll) {
+			// Filler rows carry no line number, but they also carry no text, so a match always has one.
+			if (match.side && match.lineNum != null) {
+				await this.scrollVirtToSplitLine(match.side, match.lineNum);
+			}
+		}
+		else {
+			const markdown = this.$refs.markdownDiff as { revealElement?: (el: HTMLElement, rect?: DOMRect) => boolean } | undefined;
+			if (!markdown?.revealElement?.(match.element, match.range.getBoundingClientRect())) {
+				match.element.scrollIntoView({ behavior : 'auto', block : 'center', inline : 'nearest' });
+			}
+			await this.$nextTick();
+		}
+
+		scrollMatchIntoViewHorizontally(match);
+		this.markCurrentSearchRow(match);
+	}
+
+	/** Without the Highlight API nothing is painted, so the row itself has to show where the match landed. */
+	private markCurrentSearchRow(match: FileSearchMatch) {
+		this.clearSearchRowMark();
+		if (supportsSearchPainting()) {
+			return;
+		}
+		match.element.classList.add('pr-search-current-row');
+		this._searchMarkedRow = match.element;
+	}
+
+	private clearSearchRowMark() {
+		this._searchMarkedRow?.classList.remove('pr-search-current-row');
+		this._searchMarkedRow = null;
+	}
+
+	private onPopoverClickOutside(e: MouseEvent) {
 		if (!this.activeComment) {
 			return;
 		}
@@ -1255,7 +1553,7 @@ export default class PrFilesTab extends Vue {
 			return;
 		}
 		this.closeComment();
-	};
+	}
 
 }
 </script>
@@ -1264,9 +1562,17 @@ export default class PrFilesTab extends Vue {
 @import "@/styles/pr-diff.css";
 
 .pr-files-tab {
+	position: relative;
 	width: 100%;
 	min-width: 0;
 	align-self: stretch;
+}
+
+/* Floats over the top-right of the viewer rather than pushing it down, so the hits stay where they were. */
+.pr-files-search-overlay {
+	top: 56px;
+	right: 32px;
+	z-index: 20;
 }
 
 .pr-files-empty {

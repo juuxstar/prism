@@ -273,6 +273,47 @@ export default class PrMarkdownDiff extends Vue {
 		this.applyScroll();
 	}
 
+	/**
+	 * Scrolls the split so `el` sits on the centre line. Returns false when there is nothing to drive — a
+	 * single pane scrolls natively, so the caller can fall back to `scrollIntoView` there.
+	 */
+	revealElement(el: HTMLElement, rect?: DOMRect): boolean {
+		if (this.single) {
+			return false;
+		}
+		const leftStack  = this.$refs.leftStack as HTMLElement | undefined;
+		const rightStack = this.$refs.rightStack as HTMLElement | undefined;
+		const stack      = [ leftStack, rightStack ].find(candidate => candidate?.contains(el)) ?? null;
+		if (!stack || this.maxScroll <= 0) {
+			return false;
+		}
+
+		// The stack is moved by a transform, so its own rect already carries the current offset: the gap
+		// between the two rects is the element's fixed position within the stack's content.
+		const box    = rect ?? el.getBoundingClientRect();
+		const offset = box.top - stack.getBoundingClientRect().top + box.height / 2 - this.viewportHeight / 2;
+		const isLeft = stack === leftStack;
+
+		// The two sides advance at different rates, so the virtual position that puts this side at `offset`
+		// is found by bisection over the (monotonic) resolver rather than computed directly.
+		let lo = 0;
+		let hi = this.maxScroll;
+		for (let i = 0; i < 40; i++) {
+			const mid             = (lo + hi) / 2;
+			const { left, right } = resolveScrollProportional(this.geometry.segments, mid);
+			if ((isLeft ? left : right) < offset) {
+				lo = mid;
+			}
+			else {
+				hi = mid;
+			}
+		}
+
+		this.virtualScrollTop = (lo + hi) / 2;
+		this.applyScroll();
+		return true;
+	}
+
 }
 
 function buildRow(block: MarkdownBlock, kind: MarkdownBlockPair['kind'], pairIndex: number): MarkdownRow {

@@ -75,6 +75,9 @@ html[data-color-scheme="dark"] {
 	--size-heatmap-3: #d29922;
 	--size-heatmap-4: #e67b35;
 	--size-heatmap-5: #f85149;
+	--search-match-bg: rgba(210, 153, 34, 0.3);
+	--search-match-current-bg: #d29922;
+	--search-match-current-fg: #0d1117;
 }
 
 html[data-color-scheme="light"] {
@@ -138,6 +141,9 @@ html[data-color-scheme="light"] {
 	--size-heatmap-3: #9a6700;
 	--size-heatmap-4: #bc4c00;
 	--size-heatmap-5: #cf222e;
+	--search-match-bg: rgba(255, 213, 0, 0.45);
+	--search-match-current-bg: #f8b500;
+	--search-match-current-fg: #1f2328;
 }
 
 html,
