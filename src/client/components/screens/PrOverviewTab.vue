@@ -116,6 +116,17 @@
 								<span v-if="pushingLocalChanges" class="async-loader"></span>
 								<template v-else>Git Push</template>
 							</button>
+							<button
+								v-if="showMergeDefaultBranchAction"
+								type="button"
+								class="pr-overview-action-btn pr-overview-action-merge-default u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
+								:disabled="mergeDefaultBranchDisabled"
+								:title="mergeDefaultBranchTitle"
+								@click="$emit('merge-default-branch')"
+							>
+								<span v-if="mergingDefaultBranch" class="async-loader"></span>
+								<template v-else>Merge origin/{{ defaultBranch }}</template>
+							</button>
 						</div>
 					</div>
 					<p v-if="checkoutError" class="pr-overview-checkout-error u-m-0 u-fs-13">{{ checkoutError }}</p>
@@ -453,7 +464,7 @@
 
 <script lang="ts">
 import type { GitCheckout, GitWorkspaceStatus, LocalPrStatus, PullRequestCheckoutState }             from '@/lib/api/gitCheckoutClient';
-import { checkoutStateForPr, checkoutTargetForPr } from '@/lib/api/gitCheckoutClient';
+import { checkoutStateForPr, checkoutTargetForPr, defaultBranchForPr } from '@/lib/api/gitCheckoutClient';
 import type { CheckAnnotation, CheckRunDetail, IssueComment, RepoLabel, ReviewComment, TestFailure } from '@/lib/api/githubClient';
 import GitHubClient, { isPullRequestConflicted, stripCommentTypePrefix }                             from '@/lib/api/githubClient';
 import type { CommentThread }   from '@/lib/diff/prDiffTypes';
@@ -482,7 +493,7 @@ interface TestFailureState {
 }
 
 @Component({
-	emits : [ 'add-label', 'remove-label', 'comments-updated', 'approve-pr', 'merge-pr', 'close-pr', 'toggle-draft', 'open-review-in-files', 'checkout-pr', 'commit-local-changes', 'push-local-changes' ],
+	emits : [ 'add-label', 'remove-label', 'comments-updated', 'approve-pr', 'merge-pr', 'close-pr', 'toggle-draft', 'open-review-in-files', 'checkout-pr', 'commit-local-changes', 'push-local-changes', 'merge-default-branch' ],
 })
 export default class PrOverviewTab extends Vue {
 
@@ -509,6 +520,7 @@ export default class PrOverviewTab extends Vue {
 	@Prop({ default : false }) readonly checkingOutPr!: boolean;
 	@Prop({ default : false }) readonly committingLocalChanges!: boolean;
 	@Prop({ default : false }) readonly pushingLocalChanges!: boolean;
+	@Prop({ default : false }) readonly mergingDefaultBranch!: boolean;
 	@Prop({ default : '' }) readonly checkoutError!: string;
 	@Prop({ default : '' }) readonly localGitError!: string;
 
@@ -650,6 +662,26 @@ export default class PrOverviewTab extends Vue {
 			return `Push ${aheadCount} committed change${aheadCount === 1 ? '' : 's'} to the pull request branch`;
 		}
 		return 'No committed changes to push';
+	}
+
+	get defaultBranch(): string {
+		return defaultBranchForPr(this.pr);
+	}
+
+	/** Only offered on a local checkout: the merge happens in that worktree, not on GitHub. */
+	get showMergeDefaultBranchAction(): boolean {
+		return this.showLocalGitActions && Boolean(this.defaultBranch);
+	}
+
+	get mergeDefaultBranchDisabled(): boolean {
+		return this.mergingDefaultBranch || this.committingLocalChanges || this.pushingLocalChanges || Boolean(this.localPrStatus?.hasLocalChanges);
+	}
+
+	get mergeDefaultBranchTitle(): string {
+		if (this.localPrStatus?.hasLocalChanges) {
+			return `Commit or discard local changes before merging origin/${this.defaultBranch}`;
+		}
+		return `Merge the latest origin/${this.defaultBranch} into the checked-out pull request branch`;
 	}
 
 	get worktreeOptions(): GitCheckout[] {
@@ -1223,6 +1255,12 @@ export default class PrOverviewTab extends Vue {
 .pr-overview-action-push:not(:disabled) {
 	border: none !important;
 	background: var(--accent-purple) !important;
+	color: var(--btn-primary-fg) !important;
+}
+
+.pr-overview-action-merge-default:not(:disabled) {
+	border: none !important;
+	background: var(--accent-orange) !important;
 	color: var(--btn-primary-fg) !important;
 }
 

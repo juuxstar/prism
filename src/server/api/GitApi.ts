@@ -62,6 +62,11 @@ export class GitApi extends DecoratedRouter {
 		res.json(await this.authorizedGitService(req.headers.authorization).pushLocalPullRequestChanges(req.body?.pr || {}));
 	}
 
+	@Post('/merge-default-branch')
+	async mergeDefaultBranch(req: Request, res: Response) {
+		res.json(await this.authorizedGitService(req.headers.authorization).mergeDefaultBranchIntoPullRequest(req.body?.pr || {}, req.body?.defaultBranch));
+	}
+
 	private authorizedGitService(authorization?: unknown): GitService {
 		return new GitService(this.workspaceDir, authorization, this.checkoutHostDir);
 	}

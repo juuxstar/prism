@@ -110,11 +110,32 @@
 							<span class="worktree-workspace-path u-font-mono" :title="worktreeWorkspacePath">{{ worktreeWorkspacePath || "the configured worktree directory" }}</span>
 						</p>
 					</div>
-					<span v-if="hasWorktreeParent" class="u-fs-12 u-text-tertiary">{{ worktreeRows.length }}</span>
+					<span v-if="checkoutStatusLoading" class="skeleton-line worktree-skeleton-count"></span>
+					<span v-else-if="hasWorktreeParent" class="u-fs-12 u-text-tertiary">{{ worktreeRows.length }}</span>
 				</div>
-				<div v-if="checkoutStatusLoading" class="worktrees-loading u-flex u-flex-col u-items-center u-justify-center u-gap-3 u-fs-14 u-text-tertiary" aria-busy="true">
-					<span class="spinner" aria-hidden="true"></span>
-					<span>Loading worktrees…</span>
+				<div v-if="checkoutStatusLoading" class="worktree-list" aria-busy="true" aria-label="Loading worktrees">
+					<div v-for="(widths, idx) in worktreeSkeletonRows" :key="'worktree-skeleton-' + idx" class="worktree-row">
+						<div class="u-min-w-0">
+							<span class="skeleton-line worktree-skeleton-label" :style="{ width : widths.label + 'px' }"></span>
+							<span class="skeleton-line worktree-skeleton-path" :style="{ width : widths.path + 'px' }"></span>
+						</div>
+						<div class="worktree-details">
+							<div class="worktree-detail">
+								<span class="skeleton-line worktree-skeleton-detail-label"></span>
+								<div class="u-flex u-items-center u-gap-2">
+									<span class="skeleton-block worktree-skeleton-chip" :style="{ width : widths.branch + 'px' }"></span>
+									<span class="skeleton-line worktree-skeleton-divergence"></span>
+								</div>
+							</div>
+							<div class="worktree-detail">
+								<span class="skeleton-line worktree-skeleton-detail-label"></span>
+								<div class="u-flex u-items-center u-gap-2">
+									<span class="skeleton-block worktree-skeleton-chip" :style="{ width : widths.pr + 'px' }"></span>
+									<span class="skeleton-block worktree-skeleton-chip worktree-skeleton-status"></span>
+								</div>
+							</div>
+						</div>
+					</div>
 				</div>
 				<div v-else-if="hasWorktreeParent" class="worktree-list">
 					<div v-for="row in worktreeRows" :key="row.checkout.path" class="worktree-row">
@@ -156,6 +177,25 @@
 									</button>
 								</div>
 							</div>
+							<div v-if="row.checkout.dirty" class="worktree-detail">
+								<span class="worktree-detail-label worktree-changes-label">Changes:</span>
+								<div class="worktree-changes-content u-flex u-items-center u-gap-2 u-flex-wrap">
+									<span
+										v-if="row.checkout.stagedCount"
+										class="worktree-change-count worktree-change-staged u-fs-11 u-fw-600"
+										:title="`${row.checkout.stagedCount} staged ${row.checkout.stagedCount === 1 ? 'file' : 'files'}`"
+									>{{ row.checkout.stagedCount }} staged</span>
+									<span
+										v-if="row.checkout.unstagedCount"
+										class="worktree-change-count worktree-change-unstaged u-fs-11 u-fw-600"
+										:title="`${row.checkout.unstagedCount} unstaged ${row.checkout.unstagedCount === 1 ? 'file' : 'files'}`"
+									>{{ row.checkout.unstagedCount }} unstaged</span>
+									<span
+										v-if="!row.checkout.stagedCount && !row.checkout.unstagedCount"
+										class="worktree-change-count worktree-change-unstaged u-fs-11 u-fw-600"
+									>Uncommitted changes</span>
+								</div>
+							</div>
 							<div class="worktree-detail">
 								<span class="worktree-detail-label worktree-pr-label">Pull request:</span>
 								<div v-if="row.pr" class="worktree-pr-content u-flex u-items-center u-gap-2 u-flex-wrap">
@@ -192,6 +232,14 @@ const MERGE_HIDDEN_LABELS = new Set([ 'ready to merge' ]);
 
 const TEAM_GREEK: Record<string, string> = { alpha : 'α', beta : 'β', gamma : 'γ' };
 
+/** Placeholder bar widths (px) for the loading worktree rows; varied so the skeleton does not read as a table. */
+const WORKTREE_SKELETON_ROWS = [
+	{ label : 132, path : 214, branch : 148, pr : 244 },
+	{ label : 104, path : 178, branch : 192, pr : 198 },
+	{ label : 150, path : 236, branch : 122, pr : 270 },
+	{ label : 118, path : 196, branch : 168, pr : 216 },
+];
+
 const SECTION_LABELS: Record<string, { add: string; remove: string[] }> = {
 	alpha : { add : 'α: review requested', remove : [ 'β: review requested', 'γ: review requested', 'γ: changes requested', 'ready to merge' ] },
 	beta  : { add : 'β: review requested', remove : [ 'α: review requested', 'γ: review requested', 'γ: changes requested', 'ready to merge' ] },
@@ -214,10 +262,11 @@ export default class PrBoard extends Vue {
 	@Prop({ default : false }) readonly checkoutStatusLoading!: boolean;
 	@Prop({ default : () => [] }) readonly worktreePrs!: any[];
 
-	alphaHidden = ALPHA_HIDDEN_LABELS;
-	betaHidden  = BETA_HIDDEN_LABELS;
-	mergeHidden = MERGE_HIDDEN_LABELS;
-	emptySet    = new Set<string>();
+	alphaHidden                          = ALPHA_HIDDEN_LABELS;
+	betaHidden                           = BETA_HIDDEN_LABELS;
+	mergeHidden                          = MERGE_HIDDEN_LABELS;
+	emptySet                             = new Set<string>();
+	worktreeSkeletonRows                 = WORKTREE_SKELETON_ROWS;
 	resettingWorktreePath: string | null = null;
 	pullingWorktreePath: string | null   = null;
 
@@ -663,6 +712,29 @@ interface WorktreeRow {
 	color: var(--accent-blue);
 }
 
+.worktree-changes-label {
+	color: var(--accent-orange);
+}
+
+.worktree-change-count {
+	padding: 3px var(--u-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	white-space: nowrap;
+}
+
+.worktree-change-staged {
+	border-color: var(--accent-green);
+	background: var(--chip-green-bg);
+	color: var(--accent-green);
+}
+
+.worktree-change-unstaged {
+	border-color: var(--accent-orange);
+	background: var(--chip-orange-bg);
+	color: var(--accent-orange);
+}
+
 .worktree-branch {
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -790,9 +862,37 @@ interface WorktreeRow {
 	padding: var(--u-8) var(--u-5);
 }
 
-.worktrees-loading {
-	min-height: 220px;
-	padding: var(--u-8) var(--u-5);
+.worktree-skeleton-count {
+	width: 18px;
+	height: 13px;
+}
+
+.worktree-skeleton-label {
+	height: 15px;
+}
+
+.worktree-skeleton-path {
+	height: 13px;
+	margin-top: var(--u-1-5);
+}
+
+.worktree-skeleton-detail-label {
+	width: 76px;
+	height: 11px;
+}
+
+.worktree-skeleton-chip {
+	height: 21px;
+	border-radius: var(--radius-sm);
+}
+
+.worktree-skeleton-status {
+	width: 58px;
+}
+
+.worktree-skeleton-divergence {
+	width: 118px;
+	height: 11px;
 }
 
 .pr-column {

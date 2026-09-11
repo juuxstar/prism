@@ -29,16 +29,18 @@ export class GitService {
 			...status,
 			hostWorkspaceDir : this.checkoutHostDir,
 			checkouts        : status.checkouts.map(checkout => ({
-				path        : checkout.path,
-				hostPath    : this.checkoutHostDir ? mapToHostCheckoutPath(checkout.path, status.workspaceDir, this.checkoutHostDir) : undefined,
-				label       : checkout.label,
-				branch      : checkout.branch,
-				headSha     : checkout.headSha,
-				aheadCount  : checkout.aheadCount,
-				behindCount : checkout.behindCount,
-				dirty       : checkout.dirty,
-				remoteRepos : checkout.remoteRepos,
-				isMain      : checkout.isMain,
+				path          : checkout.path,
+				hostPath      : this.checkoutHostDir ? mapToHostCheckoutPath(checkout.path, status.workspaceDir, this.checkoutHostDir) : undefined,
+				label         : checkout.label,
+				branch        : checkout.branch,
+				headSha       : checkout.headSha,
+				aheadCount    : checkout.aheadCount,
+				behindCount   : checkout.behindCount,
+				dirty         : checkout.dirty,
+				stagedCount   : checkout.stagedCount,
+				unstagedCount : checkout.unstagedCount,
+				remoteRepos   : checkout.remoteRepos,
+				isMain        : checkout.isMain,
 			})),
 		};
 	}
@@ -338,6 +340,39 @@ export class GitService {
 		return { ...status, hasUnpushedCommits : false, aheadCount : 0 };
 	}
 
+	/**
+	 * Merge the latest origin default branch into the checked-out pull request branch so the local
+	 * checkout picks up whatever landed on the default branch since the PR was created.
+	 */
+	async mergeDefaultBranchIntoPullRequest(rawTarget: CheckoutTarget, rawDefaultBranch: unknown): Promise<LocalPrStatus> {
+		const { checkout, target } = await this.findCheckoutForTarget(rawTarget);
+		const branch               = typeof rawDefaultBranch === 'string' ? rawDefaultBranch.trim() : '';
+		if (!branch) {
+			throw new BadRequestError('Default branch name is required');
+		}
+		const env = await gitEnvWithGithubIdentity(checkout, this.authorization);
+		await runGit(checkout.path, [ 'check-ref-format', '--branch', branch ], env);
+
+		const dirtyRaw = await runGit(checkout.path, [ 'status', '--porcelain' ], env, { trim : false });
+		if (dirtyRaw.trim()) {
+			throw new CheckoutConflictError(`${checkout.label} has uncommitted changes; commit or discard them before merging origin/${branch}`);
+		}
+
+		await fetchRemoteBranch(checkout, 'origin', branch, this.authorization);
+		try {
+			await runGit(checkout.path, [ 'merge', '--no-edit', `origin/${branch}` ], env);
+		}
+		catch (error: any) {
+			// A failed merge leaves the worktree mid-merge and nothing in PRism can finish or undo that,
+			// so roll it back and let the conflicts be resolved in a real editor instead.
+			await tryRunGit(checkout.path, [ 'merge', '--abort' ], env);
+			const reason = error?.message || 'the merge failed';
+			throw new CheckoutConflictError(`Could not merge origin/${branch} into ${target.headRef}: ${reason}`, { cause : error });
+		}
+
+		return this.fetchLocalPullRequestStatus(target);
+	}
+
 	private async findCheckoutForTarget(rawTarget: CheckoutTarget): Promise<{ checkout: GitCheckout; target: Required<CheckoutTarget> }> {
 		const target = GitService.requireCheckoutTarget(rawTarget);
 		const status = await this.detectGitWorkspace();
@@ -582,7 +617,7 @@ async function inspectCheckout(path: string, isMain: boolean, workspacePath: str
 	const [ branchRaw, headSha, dirtyRaw, remotesRaw ] = await Promise.all([
 		tryRunGit(checkoutPath, [ 'branch', '--show-current' ], env),
 		runGit(checkoutPath, [ 'rev-parse', 'HEAD' ], env),
-		runGit(checkoutPath, [ 'status', '--porcelain' ], env),
+		runGit(checkoutPath, [ 'status', '--porcelain' ], env, { trim : false }),
 		tryRunGit(checkoutPath, [ 'remote', '-v' ], env),
 	]);
 	const remoteRepos = [
@@ -594,9 +629,10 @@ async function inspectCheckout(path: string, isMain: boolean, workspacePath: str
 				.filter((repo): repo is string => Boolean(repo))
 		),
 	];
-	const branch                      = branchRaw || 'HEAD';
-	const divergenceRaw               = branchRaw ? await tryRunGit(checkoutPath, [ 'rev-list', '--left-right', '--count', `origin/${branchRaw}...HEAD` ], env) : null;
-	const { aheadCount, behindCount } = parseDivergence(divergenceRaw);
+	const branch                         = branchRaw || 'HEAD';
+	const divergenceRaw                  = branchRaw ? await tryRunGit(checkoutPath, [ 'rev-list', '--left-right', '--count', `origin/${branchRaw}...HEAD` ], env) : null;
+	const { aheadCount, behindCount }    = parseDivergence(divergenceRaw);
+	const { stagedCount, unstagedCount } = parseWorkingTreeCounts(dirtyRaw);
 	return {
 		path     : checkoutPath,
 		label    : isMain ? 'main directory' : basename(checkoutPath),
@@ -604,7 +640,9 @@ async function inspectCheckout(path: string, isMain: boolean, workspacePath: str
 		headSha,
 		aheadCount,
 		behindCount,
-		dirty    : dirtyRaw.length > 0,
+		dirty    : stagedCount + unstagedCount > 0,
+		stagedCount,
+		unstagedCount,
 		remoteRepos,
 		isMain,
 		gitDir   : env?.GIT_DIR,
@@ -618,6 +656,33 @@ function parseDivergence(raw: string | null): { aheadCount?: number; behindCount
 	}
 	const [ behind, ahead ] = raw.split(/\s+/).map(value => parseInt(value, 10));
 	return !Number.isFinite(ahead) || !Number.isFinite(behind) ? {} : { aheadCount : ahead, behindCount : behind };
+}
+
+/**
+ * Count the files `git status --porcelain` reports as staged and as unstaged. Each line's first column is the
+ * index status and the second is the working-tree status, so a file edited on both sides counts once for each;
+ * untracked files (`??`) are unstaged only.
+ */
+function parseWorkingTreeCounts(raw: string): { stagedCount: number; unstagedCount: number } {
+	let stagedCount   = 0;
+	let unstagedCount = 0;
+	for (const line of raw.split('\n')) {
+		if (line.length < 2) {
+			continue;
+		}
+		const [ index, workTree ] = line;
+		if (index === '?') {
+			unstagedCount++;
+			continue;
+		}
+		if (index !== ' ') {
+			stagedCount++;
+		}
+		if (workTree !== ' ') {
+			unstagedCount++;
+		}
+	}
+	return { stagedCount, unstagedCount };
 }
 
 function matchesCheckout(checkout: GitCheckout, target: Required<CheckoutTarget>): boolean {
@@ -644,6 +709,8 @@ export interface GitCheckout {
 	aheadCount?: number;
 	behindCount?: number;
 	dirty: boolean;
+	stagedCount?: number;
+	unstagedCount?: number;
 	remoteRepos: string[];
 	isMain: boolean;
 	gitDir?: string;

@@ -10,6 +10,8 @@ export interface GitCheckout {
 	aheadCount?: number;
 	behindCount?: number;
 	dirty: boolean;
+	stagedCount?: number;
+	unstagedCount?: number;
 	remoteRepos: string[];
 	isMain: boolean;
 }
@@ -112,6 +114,10 @@ export async function pushLocalPullRequestChanges(pr: PullRequestCheckoutTarget)
 	return postGitJson('/api/git/push', { pr }, true);
 }
 
+export async function mergeDefaultBranchIntoPullRequest(pr: PullRequestCheckoutTarget, defaultBranch: string): Promise<LocalPrStatus> {
+	return postGitJson('/api/git/merge-default-branch', { pr, defaultBranch }, true);
+}
+
 async function postGitJson<T>(url: string, body: unknown, withAuth = false): Promise<T> {
 	const headers = new Headers({ 'Content-Type' : 'application/json' });
 	if (withAuth) {
@@ -143,6 +149,12 @@ export function checkoutTargetForPr(pr: any): PullRequestCheckoutTarget | null {
 		headRef  : ref,
 		headSha  : typeof sha === 'string' && sha ? sha : undefined,
 	};
+}
+
+/** The origin repository's default branch, as reported on the pull request's base repo. */
+export function defaultBranchForPr(pr: any): string {
+	const branch = pr?.base?.repo?.default_branch;
+	return typeof branch === 'string' ? branch.trim() : '';
 }
 
 function branchMatches(checkoutBranch: string, prBranch: string): boolean {

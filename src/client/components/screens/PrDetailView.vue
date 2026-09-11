@@ -131,6 +131,7 @@
 						:local-pr-status="localPrStatus"
 						:committing-local-changes="committingLocalChanges"
 						:pushing-local-changes="pushingLocalChanges"
+						:merging-default-branch="mergingDefaultBranch"
 						:checking-out-pr="checkingOutPr"
 						:checkout-error="checkoutError"
 						:local-git-error="localGitError"
@@ -145,6 +146,7 @@
 						@checkout-pr="checkoutPrBranch"
 						@commit-local-changes="openLocalCommitModal"
 						@push-local-changes="pushLocalChanges"
+						@merge-default-branch="openDefaultBranchMergeConfirm"
 					/>
 					<pr-files-tab
 						v-else-if="activeTab === 'local-files'"
@@ -233,6 +235,17 @@
 					@close="closeCloseConfirm"
 					@confirm="confirmClosePr"
 				/>
+				<pr-default-branch-merge-confirm-modal
+					v-if="pr"
+					:open="defaultBranchMergeConfirmOpen"
+					:default-branch="defaultBranch"
+					:head-ref="pr.head?.ref || ''"
+					:checkout-label="checkoutState?.label || ''"
+					:error="defaultBranchMergeError"
+					:merging="mergingDefaultBranch"
+					@close="closeDefaultBranchMergeConfirm"
+					@confirm="confirmMergeDefaultBranch"
+				/>
 				<pr-error-modal
 					:open="Boolean(approvePrError)"
 					title="Could not approve"
@@ -294,22 +307,23 @@
 </template>
 
 <script lang="ts">
-import PinnedPrBar                    from '@/components/pr/PinnedPrBar.vue';
-import PrCloseConfirmModal            from '@/components/pr/PrCloseConfirmModal.vue';
-import PrDetailLoadState              from '@/components/pr/PrDetailLoadState.vue';
-import PrDetailTabBar                 from '@/components/pr/PrDetailTabBar.vue';
-import PrErrorModal                   from '@/components/pr/PrErrorModal.vue';
-import PrMergeConfirmModal            from '@/components/pr/PrMergeConfirmModal.vue';
-import PrModalDialog                  from '@/components/pr/PrModalDialog.vue';
-import PrTitleEditModal               from '@/components/pr/PrTitleEditModal.vue';
-import PrWhitespaceViewedModal        from '@/components/pr/PrWhitespaceViewedModal.vue';
-import SettingsPopup                  from '@/components/pr/SettingsPopup.vue';
-import { clearToken, getStoredToken } from '@/lib/api/auth';
+import PinnedPrBar                      from '@/components/pr/PinnedPrBar.vue';
+import PrCloseConfirmModal              from '@/components/pr/PrCloseConfirmModal.vue';
+import PrDefaultBranchMergeConfirmModal from '@/components/pr/PrDefaultBranchMergeConfirmModal.vue';
+import PrDetailLoadState                from '@/components/pr/PrDetailLoadState.vue';
+import PrDetailTabBar                   from '@/components/pr/PrDetailTabBar.vue';
+import PrErrorModal                     from '@/components/pr/PrErrorModal.vue';
+import PrMergeConfirmModal              from '@/components/pr/PrMergeConfirmModal.vue';
+import PrModalDialog                    from '@/components/pr/PrModalDialog.vue';
+import PrTitleEditModal                 from '@/components/pr/PrTitleEditModal.vue';
+import PrWhitespaceViewedModal          from '@/components/pr/PrWhitespaceViewedModal.vue';
+import SettingsPopup                    from '@/components/pr/SettingsPopup.vue';
+import { clearToken, getStoredToken }   from '@/lib/api/auth';
 import type { GitWorkspaceStatus, LocalPrStatus, PullRequestCheckoutState } from '@/lib/api/gitCheckoutClient';
 import {
-	checkoutPullRequestBranch, checkoutStateForPr, checkoutTargetForPr, commitLocalPullRequestChanges, fetchGitWorkspaceStatus,
-	fetchLocalPullRequestFileContent, fetchLocalPullRequestFiles, fetchLocalPullRequestStatus, pushLocalPullRequestChanges,
-	resetWorktreeToNaturalBranch
+	checkoutPullRequestBranch, checkoutStateForPr, checkoutTargetForPr, commitLocalPullRequestChanges, defaultBranchForPr, fetchGitWorkspaceStatus,
+	fetchLocalPullRequestFileContent, fetchLocalPullRequestFiles, fetchLocalPullRequestStatus, mergeDefaultBranchIntoPullRequest,
+	pushLocalPullRequestChanges, resetWorktreeToNaturalBranch
 } from '@/lib/api/gitCheckoutClient';
 import type { AsyncMergeResult, CheckRunDetail, IssueComment, PendingComment, PRFile, RepoLabel, ReviewComment } from '@/lib/api/githubClient';
 import GitHubClient                             from '@/lib/api/githubClient';
@@ -330,6 +344,7 @@ type PrDetailTab = 'overview' | 'local-files' | 'pr-files';
 @Component({
 	components : {
 		PrCloseConfirmModal,
+		PrDefaultBranchMergeConfirmModal,
 		PrDetailLoadState,
 		PrDetailTabBar,
 		PrErrorModal,
@@ -402,6 +417,9 @@ export default class PrDetailView extends Vue {
 	checkingOutPr                             = false;
 	committingLocalChanges                    = false;
 	pushingLocalChanges                       = false;
+	mergingDefaultBranch                      = false;
+	defaultBranchMergeConfirmOpen             = false;
+	defaultBranchMergeError                   = '';
 	refreshing                                = false;
 	/** Bumped whenever this view drops the shared caches, so the pinned strip refills instead of blanking out. */
 	pinnedChecksVersion    = 0;
@@ -1385,6 +1403,54 @@ export default class PrDetailView extends Vue {
 		}
 		finally {
 			this.pushingLocalChanges = false;
+		}
+	}
+
+	get defaultBranch(): string {
+		return defaultBranchForPr(this.pr);
+	}
+
+	openDefaultBranchMergeConfirm() {
+		this.defaultBranchMergeError       = '';
+		this.localGitError                 = '';
+		this.defaultBranchMergeConfirmOpen = true;
+	}
+
+	closeDefaultBranchMergeConfirm() {
+		if (this.mergingDefaultBranch) {
+			return;
+		}
+		this.defaultBranchMergeConfirmOpen = false;
+		this.defaultBranchMergeError       = '';
+	}
+
+	async confirmMergeDefaultBranch() {
+		if (this.mergingDefaultBranch) {
+			return;
+		}
+		const target        = checkoutTargetForPr(this.pr);
+		const defaultBranch = this.defaultBranch;
+		if (!target || !defaultBranch) {
+			this.defaultBranchMergeError = 'Reload this pull request so branch details are available.';
+			return;
+		}
+		this.mergingDefaultBranch    = true;
+		this.defaultBranchMergeError = '';
+		this.localGitError           = '';
+		try {
+			this.localPrStatus                 = await mergeDefaultBranchIntoPullRequest(target, defaultBranch);
+			this.defaultBranchMergeConfirmOpen = false;
+			// The merge rewrites the working tree, so the cached local diff and its viewed marks no longer apply.
+			this.localFiles       = [];
+			this.localViewedFiles = {};
+			await this.refreshCheckoutStatus();
+		}
+		catch (error: any) {
+			this.defaultBranchMergeError = error.message || `Could not merge origin/${defaultBranch}`;
+			this.localGitError           = this.defaultBranchMergeError;
+		}
+		finally {
+			this.mergingDefaultBranch = false;
 		}
 	}
 
