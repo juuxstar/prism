@@ -1,24 +1,48 @@
 # PRism
 
-PRism is a web app that authenticates with your GitHub account and displays your open pull requests in a kanban-style board.
+PRism is a web app that authenticates with your GitHub account, shows your open pull requests on a
+kanban-style board, and reviews them in a side-by-side diff viewer backed by an optional local checkout.
 
 ## Features
 
+### Dashboard
+
 - **GitHub Device Flow Authentication** — sign in via a one-time code, no callback URLs or client secrets
-- **Team-based PR Board** — Alpha Review, Beta Review, Your Review, Waiting on Checks, Ready to Merge columns
+- **Team-based PR Board** — Other PRs, Alpha Review, Beta Review, Your Review, Waiting on Checks, Ready to Merge and Drafts columns
 - **Team Filter** — switch between Alpha, Beta, and Gamma teams with persisted selection
 - **Rich PR Details** — labels with colors, CI check squares, Cursor bot comment indicators, size dots, conflict badges
 - **Drag-and-Drop** — reorder PRs within a section or move them between sections (auto-updates labels)
 - **Create PR** — create new PRs from recent branches directly in the dashboard
 - **Checks Polling** — automatically monitors pending CI checks and moves PRs to "Ready to Merge" when they pass
-- **Draft View** — toggle between ready PRs and drafts
-- **Dark Theme** — GitHub-inspired dark UI
+- **Pinned PRs** — keep the ones you are shepherding in the header, with their check state, from any screen
+- **Worktree Overview** — local checkouts with their branch, divergence from the remote, and staged/unstaged counts
+
+### Pull Request Detail
+
+- **Overview Tab** — checks, labels, review decision, and review plus issue comments in one thread list
+- **PR Actions** — approve, merge, close, toggle draft, and edit the title without leaving the app
+- **Local Checkout** — check a PR out into a worktree, then commit or push from the Overview tab
+- **PR Files and Local Files Tabs** — review the pushed diff, or whatever is currently on disk in the worktree
+- **Open in Cursor** — jump from the file you are reading to the same file in the local checkout
+
+### Diff Viewer
+
+- **Aligned Split Diff** — both panes move on one virtual scroll axis so matching code stays level, with ribbons drawn between them
+- **Minimap** — whole-file change overview; click or drag it to jump
+- **Word-level Highlighting** — intra-line diffs on paired changes, via a Myers shortest-edit-script
+- **Rendered Markdown Diff** — diff markdown as rendered blocks instead of source lines
+- **Image and Media Diffs** — before/after panes for renderable media, rather than "binary file not shown"
+- **Find in File** — Cmd/Ctrl+F searches the open file and scrolls each hit into view, sideways on long lines too
+- **Inline Review Comments** — comment from the gutter, batch them into a pending review, submit when ready
+- **Viewed Tracking** — mark files viewed, skip to the next unviewed one, or clear all whitespace-only files at once
+- **Appearance** — light, dark or system, with a choice of syntax theme, diff font size and tab width
 
 ## Tech Stack
 
 - **Frontend**: Vue 3 + TypeScript + Vite, class components via `vue-facing-decorator`, Vue Single File Components
-- **Server**: Express + `http-proxy-middleware`, proxies all GitHub API and device-flow calls
+- **Server**: Express + `http-proxy-middleware`, proxies the GitHub API and device-flow calls, and runs `git` for local checkouts
 - **Auth**: GitHub Device Flow through the Express server, token stored in `localStorage`
+- **Rendering**: `highlight.js` for syntax highlighting, `marked` + `dompurify` for markdown, hand-rolled Myers diffs for the split and word-level views
 
 ## Setup
 
@@ -204,66 +228,107 @@ PRism/
   docker-compose.dev.yml        Same proxy URL with Vite hot reload in development
   scripts/
     deploy-image.sh             Build locally, upload, load, and run via Docker Compose
+    prepare-http-decorators.mjs Postinstall step for the http-decorators dependency
   tsconfig.json
   vite.config.ts
   eslint.config.js
   src/
     server/
-      tsconfig.json              Build/editor/lint config for server TypeScript
-      index.ts                   Express: GitHub App auth proxy + GitHub API proxy + static serving
-    client/
-      index.html                 Vite SPA entry point
-      main.ts                    Creates Vue app, registers components, mounts
-      App.vue                    Root component — auth flow, data fetching, polling
-      env.d.ts                   TypeScript shims
-      assets/
-        dashboard.css            All styles (GitHub dark theme)
+      tsconfig.json             Build/editor/lint config for server TypeScript
+      index.ts                  Express: mounts the API routers, proxies GitHub, serves the SPA
+      api/
+        AuthApi.ts              Device-flow endpoints under /api/auth
+        GitApi.ts               Local checkout endpoints under /api/git
       lib/
-        githubClient.ts          GitHub REST + GraphQL client, caches
-        icons.ts                 SVG icon definitions
-      services/
-        auth.ts                  Device flow auth via /api/auth/* endpoints
+        GitService.ts           Runs git against the mounted checkout workspace
+    client/
+      index.html                Vite SPA entry point
+      env.d.ts                  TypeScript shims
+      app/
+        main.ts                 Creates the Vue app, registers global components, mounts
+        AppShell.vue            Root shell that renders the active route
+        App.vue                 Dashboard route — auth flow, data fetching, polling
+        router.ts               Dashboard and /pull-request/:owner/:repo/:number routes
+      styles/
+        dashboard.css           Theme tokens and dashboard styles
+        pr-diff.css             Diff viewer styles
+        utilities.css           Utility classes (u-*)
+      lib/
+        api/
+          githubClient.ts       GitHub REST + GraphQL client, caches
+          gitCheckoutClient.ts  Client for the /api/git endpoints
+          auth.ts               Device flow auth via /api/auth/*
+        diff/
+          diffLineBuilder.ts    Builds split diff lines from a patch or from whole files
+          patchDiff.ts          Patch parsing and common-block detection
+          myers.ts              Shortest-edit-script, shared by the word and block diffs
+          wordDiff.ts           Intra-line word-level highlighting
+          markdownBlocks.ts     Block-level diff of rendered markdown
+          diffVirtualScroll.ts  Measured-height scroll geometry for the markdown diff
+          fileSearch.ts         Find-in-file match collection and highlight painting
+        theme/                  Color scheme, syntax theme, and diff display settings
+        icons.ts                SVG icon definitions
+        githubMarkdown.ts       Markdown rendering via marked + DOMPurify
+        pinnedPrs.ts            Pinned PR storage
+        localViewedFiles.ts     Viewed-file state for the Local Files tab
+        pendingReviewStorage.ts Unsubmitted review comments, keyed by head SHA
       components/
-        AppHeader.vue            Header with repo select, type filter, team select, user info
-        AuthScreen.vue           Sign-in screen
-        CreatePrSection.vue      Create PRs from recent branches
-        DeviceScreen.vue         Device code verification UI
-        ErrorScreen.vue          Error display with retry
-        LoadingScreen.vue        Loading spinner
-        PrBoard.vue              Main board layout, PR categorization, drag-and-drop
-        PrColumn.vue             Reusable column with drag-and-drop support
-        PrItem.vue               Single PR card with labels, checks, stats
-        RateLimitBanner.vue      Rate limit warning banner
-        ...
+        screens/
+          AuthScreen.vue        Sign-in screen
+          PrDetailView.vue      PR detail route — header, tabs, PR actions
+          PrOverviewTab.vue     Checks, labels, comments, and local checkout actions
+          PrFilesTab.vue        Diff viewer behind both the PR Files and Local Files tabs
+        pr/
+          AppHeader.vue         Header with repo select, type filter, team select, user info
+          PrBoard.vue           Board layout, PR categorization, drag-and-drop, worktrees
+          PrColumn.vue          Reusable column with drag-and-drop support
+          PrItem.vue            Single PR card with labels, checks, stats
+          PrFilesNavBar.vue     File picker, prev/next, and viewed controls
+          PrDiffTable.vue       One side of a split diff
+          DiffMinimap.vue       Whole-file change overview
+          PrMarkdownDiff.vue    Rendered-markdown split diff
+          PrMediaViewer.vue     Before/after panes for images and other media
+          PrFileSearchBar.vue   Find-in-file bar
+          CommentPopover.vue    Inline review comment thread
+          PinnedPrBar.vue       Pinned PRs in the header
+          SettingsPopup.vue     Appearance, syntax theme, font and tab size
+          ...
 ```
 
 ## Architecture
 
 ```
-Browser (Vite SPA)              Express Server               GitHub
-┌──────────────────┐     ┌────────────────────────┐    ┌──────────────┐
-│  App.vue         │     │  POST /api/auth/*      │───>│ Device Flow  │
-│  GitHubClient.ts │────>│  ALL  /api/github/*    │───>│ REST + GQL   │
-│  auth.ts         │     │  Static dist/ serving  │    │ api.github.com│
-└──────────────────┘     └────────────────────────┘    └──────────────┘
+Browser (Vite SPA)             Express Server                 GitHub
+┌────────────────────┐   ┌──────────────────────────┐   ┌────────────────┐
+│  App.vue           │   │  POST /api/auth/*        │──>│  Device Flow   │
+│  PrDetailView.vue  │──>│  ALL  /api/github/*      │──>│  REST + GraphQL│
+│  githubClient.ts   │   │  POST /api/git/*         │   │  api.github.com│
+│  gitCheckoutClient │   │  Static dist/ serving    │   └────────────────┘
+└────────────────────┘   └────────────┬─────────────┘
+                                      │ git CLI
+                                      v
+                         Mounted checkout workspace
 ```
 
-All GitHub API calls go through the Express proxy at `/api/github/*`, which forwards the `Authorization` header to `api.github.com`. GitHub App device-flow calls go through `/api/auth/*`.
+All GitHub API calls go through the Express proxy at `/api/github/*`, which forwards the
+`Authorization` header to `api.github.com`. GitHub App device-flow calls go through `/api/auth/*`.
+Local checkout actions go through `/api/git/*`, where the server runs `git` against the checkout
+workspace mounted into the container.
 
 ## Scripts
 
-| Command                | Description                                                       |
-| ---------------------- | ----------------------------------------------------------------- |
-| `npm run dev`             | Start Vite dev server + Express server on localhost               |
-| `npm run dev:docker`      | Start Vite dev through Docker Compose and the shared proxy        |
+| Command                   | Description                                                        |
+| ------------------------- | ------------------------------------------------------------------ |
+| `npm run dev`             | Start Vite dev server + Express server on localhost                |
+| `npm run dev:docker`      | Start Vite dev through Docker Compose and the shared proxy         |
 | `npm run start:docker`    | Start production PRism through Docker Compose and the shared proxy |
-| `npm run stop:docker`     | Stop the production Docker Compose PRism service                  |
-| `npm run stop:dev:docker` | Stop the development Docker Compose PRism service                 |
-| `npm run logs:docker`     | Follow production Docker Compose logs for the PRism service       |
-| `npm run logs:dev:docker` | Follow development Docker Compose logs for the PRism service      |
-| `npm run build`        | Build frontend to `dist/`                                   |
-| `npm start`            | Run Express serving `dist/` + API proxy without Docker      |
-| `npm run typecheck`    | Run `vue-tsc` type checking                                 |
+| `npm run stop:docker`     | Stop the production Docker Compose PRism service                   |
+| `npm run stop:dev:docker` | Stop the development Docker Compose PRism service                  |
+| `npm run logs:docker`     | Follow production Docker Compose logs for the PRism service        |
+| `npm run logs:dev:docker` | Follow development Docker Compose logs for the PRism service       |
+| `npm run build`           | Build frontend to `dist/`                                          |
+| `npm start`               | Run Express serving `dist/` + API proxy without Docker             |
+| `npm run typecheck`       | Run `vue-tsc` type checking                                        |
 
 ## Security Notes
 
@@ -274,17 +339,17 @@ All GitHub API calls go through the Express proxy at `/api/github/*`, which forw
 
 ## Troubleshooting
 
-| Issue                         | Solution                                                                       |
-| ----------------------------- | ------------------------------------------------------------------------------ |
-| "Failed to start device flow" | Verify your GitHub App Client ID in `GITHUB_CLIENT_ID` and that Device Flow is enabled |
-| "The device code has expired" | Codes expire after ~15 minutes — click sign in again                           |
-| "Authorization was denied"    | You clicked Cancel on the GitHub page — try again                              |
-| "Session expired"             | Sign out and sign in again                                                     |
-| No PRs showing                | Ensure the GitHub App is installed on the repositories and has pull request access |
-| CORS errors                   | Make sure the Express server is running (`npm run dev` starts both)            |
-| HMR not updating in dev:docker | Confirm `VITE_DEV_ORIGIN` matches your proxy URL (`https://prism.localhost:8888`) |
-| `web-proxy` network missing  | Start the shared proxy stack first; PRism's Compose file expects that external network |
-| `prism.localhost:8888` fails | Confirm the shared proxy is running and the PRism container is attached to `web-proxy` |
+| Issue                          | Solution                                                                               |
+| ------------------------------ | -------------------------------------------------------------------------------------- |
+| "Failed to start device flow"  | Verify your GitHub App Client ID in `GITHUB_CLIENT_ID` and that Device Flow is enabled |
+| "The device code has expired"  | Codes expire after ~15 minutes — click sign in again                                   |
+| "Authorization was denied"     | You clicked Cancel on the GitHub page — try again                                      |
+| "Session expired"              | Sign out and sign in again                                                             |
+| No PRs showing                 | Ensure the GitHub App is installed on the repositories and has pull request access     |
+| CORS errors                    | Make sure the Express server is running (`npm run dev` starts both)                    |
+| HMR not updating in dev:docker | Confirm `VITE_DEV_ORIGIN` matches your proxy URL (`https://prism.localhost:8888`)      |
+| `web-proxy` network missing    | Start the shared proxy stack first; PRism's Compose file expects that external network |
+| `prism.localhost:8888` fails   | Confirm the shared proxy is running and the PRism container is attached to `web-proxy` |
 
 ## License
 
