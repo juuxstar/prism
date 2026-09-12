@@ -1512,6 +1512,12 @@ export interface PRFile {
 	changes: number;
 	patch?: string;
 	previous_filename?: string;
+	/**
+	 * Set when PRism paired this file's two halves itself because GitHub reported them as an unrelated
+	 * deletion and addition. GitHub still knows them as two paths, so anything addressed to GitHub by
+	 * path — a review comment, viewed state — has to use `previous_filename` for the base side.
+	 */
+	synthesizedRename?: boolean;
 }
 
 export type CommentType = 'suggestion' | 'change-required' | 'question';

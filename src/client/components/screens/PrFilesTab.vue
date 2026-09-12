@@ -404,12 +404,16 @@ export default class PrFilesTab extends Vue {
 			}
 			return;
 		}
+		// A rename PRism merged is still two files to GitHub, so both halves take the new state together.
+		const paths = file.synthesizedRename && file.previous_filename ? [ filename, file.previous_filename ] : [ filename ];
 		try {
-			if (wasViewed) {
-				await GitHubClient.unmarkFileAsViewed(this.prNodeId, filename);
-			}
-			else {
-				await GitHubClient.markFileAsViewed(this.prNodeId, filename);
+			for (const path of paths) {
+				if (wasViewed) {
+					await GitHubClient.unmarkFileAsViewed(this.prNodeId, path);
+				}
+				else {
+					await GitHubClient.markFileAsViewed(this.prNodeId, path);
+				}
 			}
 		}
 		catch {
@@ -848,7 +852,7 @@ export default class PrFilesTab extends Vue {
 		) as HTMLElement | null
 				?? root.querySelector(`tr[data-diff-line="${lineNum}"][data-diff-side="${side}"] td.pr-diff-gutter`) as HTMLElement | null;
 
-		const path = this.currentFile.filename;
+		const path = this.commentPathForSide(side);
 		const lc   = this.lineSnippetAt(side, lineNum);
 
 		const rect         = gutterCell?.getBoundingClientRect() ?? new DOMRect(120, window.innerHeight * 0.2, 0, 22);
@@ -1130,6 +1134,19 @@ export default class PrFilesTab extends Vue {
 		return this.currentFile?.status === 'removed' ? 'LEFT' : 'RIGHT';
 	}
 
+	/**
+	 * The GitHub path a comment on this side belongs to. For everything GitHub itself paired up these are
+	 * the same path; for a rename PRism merged, the base pane's lines only exist under the deleted path,
+	 * so that is where a comment on them has to be read from and posted to.
+	 */
+	commentPathForSide(side: 'LEFT' | 'RIGHT'): string {
+		const file = this.currentFile;
+		if (!file) {
+			return '';
+		}
+		return side === 'LEFT' && file.synthesizedRename && file.previous_filename ? file.previous_filename : file.filename;
+	}
+
 	get currentFileThreads(): { left: Map<number, CommentThread>; right: Map<number, CommentThread> } {
 		const left     = new Map<number, CommentThread>();
 		const right    = new Map<number, CommentThread>();
@@ -1138,10 +1155,11 @@ export default class PrFilesTab extends Vue {
 			return { left, right };
 		}
 
+		const leftPath = this.commentPathForSide('LEFT');
 		const rootMap  = new Map<number, ReviewComment>();
 		const replyMap = new Map<number, ReviewComment[]>();
 		for (const c of this.reviewComments) {
-			if (c.path !== filename) {
+			if (c.path !== (c.side === 'LEFT' ? leftPath : filename)) {
 				continue;
 			}
 			if (c.in_reply_to_id) {
@@ -1164,7 +1182,7 @@ export default class PrFilesTab extends Vue {
 			}
 			const replies               = replyMap.get(rootId) || [];
 			const all                   = [ root, ...replies ].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-			const thread: CommentThread = { path : filename, line, side : root.side, comments : all };
+			const thread: CommentThread = { path : root.side === 'LEFT' ? leftPath : filename, line, side : root.side, comments : all };
 			const map                   = root.side === 'LEFT' ? left : right;
 			map.set(line, thread);
 		}
@@ -1178,8 +1196,9 @@ export default class PrFilesTab extends Vue {
 		if (!filename) {
 			return { left, right };
 		}
+		const leftPath = this.commentPathForSide('LEFT');
 		for (const c of this.pendingComments) {
-			if (c.path !== filename) {
+			if (c.path !== (c.side === 'LEFT' ? leftPath : filename)) {
 				continue;
 			}
 			const map = c.side === 'LEFT' ? left : right;
@@ -1268,7 +1287,7 @@ export default class PrFilesTab extends Vue {
 			return;
 		}
 		const rect         = td.getBoundingClientRect();
-		this.activeComment = { path : this.currentFile.filename, line : line.num, side, rect, lineContent : line.content };
+		this.activeComment = { path : this.commentPathForSide(side), line : line.num, side, rect, lineContent : line.content };
 	}
 
 	closeComment() {

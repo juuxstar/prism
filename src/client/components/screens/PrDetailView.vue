@@ -328,6 +328,7 @@ import {
 import type { AsyncMergeResult, CheckRunDetail, IssueComment, PendingComment, PRFile, RepoLabel, ReviewComment } from '@/lib/api/githubClient';
 import GitHubClient                             from '@/lib/api/githubClient';
 import { isWhitespaceOnlyFileChange }           from '@/lib/diff/patchDiff';
+import { detectRenamedFiles }                   from '@/lib/diff/renameDetection';
 import { loadLocalViewedFiles, setLocalFileViewed } from '@/lib/localViewedFiles';
 import { loadPendingReview, savePendingReview } from '@/lib/pendingReviewStorage';
 import { isPinned, syncPinnedPr, togglePinnedPr } from '@/lib/pinnedPrs';
@@ -1109,7 +1110,8 @@ export default class PrDetailView extends Vue {
 		this.filesLoading      = true;
 		this._loadFilesPromise = (async () => {
 			try {
-				const fileList = await GitHubClient.fetchPRFiles(this.owner, this.repo, this.prNumber, force);
+				const rawFiles = await GitHubClient.fetchPRFiles(this.owner, this.repo, this.prNumber, force);
+				const fileList = await detectRenamedFiles(rawFiles, this.loadRenameCandidateContent);
 				const result   = await GitHubClient.fetchPRFilesViewedState(this.owner, this.repo, this.prNumber);
 				this.applyViewedStateFromApi(fileList, result);
 				this.files = fileList;
@@ -1196,6 +1198,20 @@ export default class PrDetailView extends Vue {
 		}
 	}
 
+	/** One side of one candidate file, for the rename detector. A read that fails just abandons the pair. */
+	private loadRenameCandidateContent = async (path: string, side: 'base' | 'head'): Promise<string | null> => {
+		const ref = side === 'base' ? this.pr?.base?.sha : this.pr?.head?.sha;
+		if (!ref) {
+			return null;
+		}
+		try {
+			return await GitHubClient.fetchFileContent(this.owner, this.repo, path, ref);
+		}
+		catch {
+			return null;
+		}
+	};
+
 	/** Apply GitHub viewed-file state for `fileList` so `files` and `viewedFiles` stay in sync for the child PR Files tab. */
 	private applyViewedStateFromApi(fileList: PRFile[], result: { prNodeId: string; viewedFiles: Record<string, string> }) {
 		this.prNodeId = result.prNodeId;
@@ -1204,7 +1220,12 @@ export default class PrDetailView extends Vue {
 			const merged: Record<string, string> = {};
 			for (const f of fileList) {
 				let state = byPath[f.filename];
-				if (state === undefined && f.previous_filename) {
+				if (f.synthesizedRename && f.previous_filename) {
+					// GitHub tracks the two halves separately, so the merged file is only really viewed
+					// once both are — otherwise marking it viewed would not survive a reload.
+					state = state === 'VIEWED' && byPath[f.previous_filename] === 'VIEWED' ? 'VIEWED' : 'UNVIEWED';
+				}
+				else if (state === undefined && f.previous_filename) {
 					state = byPath[f.previous_filename];
 				}
 				if (state !== undefined) {

@@ -1,10 +1,18 @@
 /**
  * Shortest-edit-script over two sequences, via Myers' O(ND) algorithm.
  *
- * Shared by the intra-line word diff (which compares tokens) and the rendered-markdown block diff
- * (which compares whole rendered blocks), so both agree on how a change run is shaped.
+ * Shared by the intra-line word diff (which compares tokens), the rendered-markdown block diff (which
+ * compares whole rendered blocks) and the rename detector (which compares whole files), so they all
+ * agree on how a change run is shaped.
+ *
+ * The algorithm keeps one snapshot per edit-distance step, so its memory grows with the *product* of the
+ * edit distance and the input length. That is nothing for a line's worth of tokens but real for two whole
+ * files, so a caller working at that size passes `maxEditDistance` and gets null rather than a heap spike
+ * when the two turn out to be too far apart to be worth diffing.
  */
-export function diffSequences(oldKeys: string[], newKeys: string[]): SequenceEdit[] {
+export function diffSequences(oldKeys: string[], newKeys: string[]): SequenceEdit[];
+export function diffSequences(oldKeys: string[], newKeys: string[], maxEditDistance: number): SequenceEdit[] | null;
+export function diffSequences(oldKeys: string[], newKeys: string[], maxEditDistance = Infinity): SequenceEdit[] | null {
 	const n = oldKeys.length;
 	const m = newKeys.length;
 
@@ -26,8 +34,9 @@ export function diffSequences(oldKeys: string[], newKeys: string[]): SequenceEdi
 	v[offset + 1] = 0;
 
 	const trace: Int32Array[] = [];
+	let reachedEnd            = false;
 
-	outer: for (let d = 0; d <= max; d++) {
+	outer: for (let d = 0; d <= max && d <= maxEditDistance; d++) {
 		const snap = new Int32Array(vSize);
 		snap.set(v);
 		trace.push(snap);
@@ -42,9 +51,15 @@ export function diffSequences(oldKeys: string[], newKeys: string[]): SequenceEdi
 			}
 			v[offset + k] = x;
 			if (x >= n && y >= m) {
+				reachedEnd = true;
 				break outer;
 			}
 		}
+	}
+
+	// Only reachable when a budget cut the search short: without one, Myers always lands by d === max.
+	if (!reachedEnd) {
+		return null;
 	}
 
 	const edits: SequenceEdit[] = [];
