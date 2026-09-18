@@ -122,7 +122,6 @@ export default class PrItem extends Vue {
 	@Prop({ required : true }) readonly pr!: any;
 	@Prop({ default : () => new Set<string>() }) readonly hiddenLabels!: Set<string>;
 	@Prop({ required : true }) readonly showRepo!: boolean;
-	@Prop({ required : true }) readonly asyncVersion!: number;
 	@Prop({ default : null }) readonly checkoutStatus!: GitWorkspaceStatus | null;
 
 	readonly timeAgo = timeAgo;
@@ -165,7 +164,6 @@ export default class PrItem extends Vue {
 	}
 
 	get hasConflicts(): boolean {
-		void this.asyncVersion;
 		const mergeability = GitHubClient.getPRMergeability(this.pr.id);
 		return isPullRequestConflicted(mergeability);
 	}
@@ -183,7 +181,6 @@ export default class PrItem extends Vue {
 	}
 
 	get botComments(): BotCounts | null {
-		void this.asyncVersion;
 		return GitHubClient.getBotComments(this.pr.id);
 	}
 
@@ -193,12 +190,10 @@ export default class PrItem extends Vue {
 	}
 
 	get stats(): PRStats | null {
-		void this.asyncVersion;
 		return GitHubClient.getPRStats(this.pr.id);
 	}
 
 	get checks(): ChecksSummary | null {
-		void this.asyncVersion;
 		return GitHubClient.getChecks(this.pr.id);
 	}
 
@@ -207,7 +202,6 @@ export default class PrItem extends Vue {
 	}
 
 	get checkoutState(): PullRequestCheckoutState | null {
-		void this.asyncVersion;
 		return checkoutStateForPr(this.pr, this.checkoutStatus);
 	}
 

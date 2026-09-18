@@ -293,26 +293,31 @@ export class GitService {
 		return { base, head, encoding : 'text' };
 	}
 
-	/** Report whether the local checkout has uncommitted changes or commits absent from the remote PR branch. */
-	async fetchLocalPullRequestStatus(rawTarget: CheckoutTarget): Promise<LocalPrStatus> {
+	/**
+	 * Report whether the local checkout has uncommitted changes or commits absent from the remote PR branch.
+	 * Given the repository's default branch, also report how many of its commits the checkout is missing.
+	 */
+	async fetchLocalPullRequestStatus(rawTarget: CheckoutTarget, rawDefaultBranch?: unknown): Promise<LocalPrStatus> {
 		const { checkout, target } = await this.findCheckoutForTarget(rawTarget);
 		const env                  = gitEnv(checkout);
 		const fetchEnv             = gitEnvWithGithubAuth(checkout, this.authorization);
 		await runGit(checkout.path, [ 'cat-file', '-e', `${target.headSha}^{commit}` ], env);
 		const dirtyRaw = await runGit(checkout.path, [ 'status', '--porcelain' ], env, { trim : false });
 		await runGit(checkout.path, [ 'fetch', '--no-tags', `https://github.com/${target.headRepo}.git`, `refs/heads/${target.headRef}` ], fetchEnv);
-		const aheadRaw   = await runGit(checkout.path, [ 'rev-list', '--count', 'FETCH_HEAD..HEAD' ], env);
-		const aheadCount = parseInt(aheadRaw, 10);
+		const aheadRaw    = await runGit(checkout.path, [ 'rev-list', '--count', 'FETCH_HEAD..HEAD' ], env);
+		const aheadCount  = parseInt(aheadRaw, 10);
+		const behindCount = await countCommitsBehindRemoteBranch(checkout, rawDefaultBranch, this.authorization);
 		return {
-			hasLocalChanges    : dirtyRaw.trim().length > 0,
-			hasUnpushedCommits : Number.isFinite(aheadCount) && aheadCount > 0,
-			aheadCount         : Number.isFinite(aheadCount) ? aheadCount : 0,
-			checkoutPath       : checkout.path,
+			hasLocalChanges          : dirtyRaw.trim().length > 0,
+			hasUnpushedCommits       : Number.isFinite(aheadCount) && aheadCount > 0,
+			aheadCount               : Number.isFinite(aheadCount) ? aheadCount : 0,
+			checkoutPath             : checkout.path,
+			behindDefaultBranchCount : behindCount,
 		};
 	}
 
 	/** Commit all local pull request changes using the authenticated GitHub user identity. */
-	async commitLocalPullRequestChanges(rawTarget: CheckoutTarget, rawMessage: unknown): Promise<LocalPrStatus> {
+	async commitLocalPullRequestChanges(rawTarget: CheckoutTarget, rawMessage: unknown, rawDefaultBranch?: unknown): Promise<LocalPrStatus> {
 		const { checkout, target } = await this.findCheckoutForTarget(rawTarget);
 		const env                  = await gitEnvWithGithubIdentity(checkout, this.authorization);
 		const message              = typeof rawMessage === 'string' ? rawMessage.trim() : '';
@@ -325,14 +330,14 @@ export class GitService {
 			throw new BadRequestError('There are no local changes to commit');
 		}
 		await runGit(checkout.path, [ 'commit', '-m', message ], env);
-		return this.fetchLocalPullRequestStatus(target);
+		return this.fetchLocalPullRequestStatus(target, rawDefaultBranch);
 	}
 
 	/** Push local commits back to the pull request source branch. */
-	async pushLocalPullRequestChanges(rawTarget: CheckoutTarget): Promise<LocalPrStatus> {
+	async pushLocalPullRequestChanges(rawTarget: CheckoutTarget, rawDefaultBranch?: unknown): Promise<LocalPrStatus> {
 		const { checkout, target } = await this.findCheckoutForTarget(rawTarget);
 		const env                  = gitEnvWithGithubAuth(checkout, this.authorization);
-		const status               = await this.fetchLocalPullRequestStatus(target);
+		const status               = await this.fetchLocalPullRequestStatus(target, rawDefaultBranch);
 		if (!status.hasUnpushedCommits) {
 			throw new BadRequestError('There are no committed changes to push');
 		}
@@ -341,8 +346,8 @@ export class GitService {
 	}
 
 	/**
-	 * Merge the latest origin default branch into the checked-out pull request branch so the local
-	 * checkout picks up whatever landed on the default branch since the PR was created.
+	 * Pull the pull request branch, then merge the latest origin default branch into it, so the local
+	 * checkout picks up both its own new commits and whatever landed on the default branch since.
 	 */
 	async mergeDefaultBranchIntoPullRequest(rawTarget: CheckoutTarget, rawDefaultBranch: unknown): Promise<LocalPrStatus> {
 		const { checkout, target } = await this.findCheckoutForTarget(rawTarget);
@@ -358,6 +363,18 @@ export class GitService {
 			throw new CheckoutConflictError(`${checkout.label} has uncommitted changes; commit or discard them before merging origin/${branch}`);
 		}
 
+		// Pull the pull request's own branch first: merging into a stale local copy would otherwise build a
+		// merge commit on top of commits the PR has already moved past. `env` already carries the GitHub
+		// credentials, and --ff-only keeps a diverged local branch from being silently merged with itself.
+		await runGit(checkout.path, [ 'fetch', '--no-tags', `https://github.com/${target.headRepo}.git`, `refs/heads/${target.headRef}` ], env);
+		try {
+			await runGit(checkout.path, [ 'merge', '--ff-only', 'FETCH_HEAD' ], env);
+		}
+		catch (error: any) {
+			const reason = error?.message || 'the pull failed';
+			throw new CheckoutConflictError(`Could not pull the latest ${target.headRef} into ${checkout.label}: ${reason}`, { cause : error });
+		}
+
 		await fetchRemoteBranch(checkout, 'origin', branch, this.authorization);
 		try {
 			await runGit(checkout.path, [ 'merge', '--no-edit', `origin/${branch}` ], env);
@@ -370,7 +387,7 @@ export class GitService {
 			throw new CheckoutConflictError(`Could not merge origin/${branch} into ${target.headRef}: ${reason}`, { cause : error });
 		}
 
-		return this.fetchLocalPullRequestStatus(target);
+		return this.fetchLocalPullRequestStatus(target, branch);
 	}
 
 	private async findCheckoutForTarget(rawTarget: CheckoutTarget): Promise<{ checkout: GitCheckout; target: Required<CheckoutTarget> }> {
@@ -431,6 +448,27 @@ async function listChangedTrackedFiles(checkout: GitCheckout, sha: string, env?:
 		files.push({ filename : path, status });
 	}
 	return files;
+}
+
+/**
+ * How many commits on a remote branch the checkout's HEAD is missing. Returns undefined rather than
+ * throwing when the branch is unusable or unreachable: this only drives a button's label, and a PR is
+ * still reviewable when the count cannot be worked out.
+ */
+async function countCommitsBehindRemoteBranch(checkout: GitCheckout, rawBranch: unknown, authorization: unknown): Promise<number | undefined> {
+	const branch = typeof rawBranch === 'string' ? rawBranch.trim() : '';
+	if (!branch || (await tryRunGit(checkout.path, [ 'check-ref-format', '--branch', branch ], gitEnv(checkout))) === null) {
+		return undefined;
+	}
+	try {
+		await fetchRemoteBranch(checkout, 'origin', branch, authorization);
+	}
+	catch {
+		return undefined;
+	}
+	const raw   = await tryRunGit(checkout.path, [ 'rev-list', '--count', `HEAD..origin/${branch}` ], gitEnv(checkout));
+	const count = parseInt(raw ?? '', 10);
+	return Number.isFinite(count) ? count : undefined;
 }
 
 function requireRelativePath(rawPath: unknown): string {
@@ -753,6 +791,8 @@ export interface LocalPrStatus {
 	hasUnpushedCommits: boolean;
 	aheadCount: number;
 	checkoutPath: string;
+	/** Commits on the repository's default branch that HEAD is missing; undefined when it could not be read. */
+	behindDefaultBranchCount?: number;
 }
 
 interface GitRunTextOptions {

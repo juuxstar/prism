@@ -6,7 +6,6 @@
 		:current-type-filter="currentTypeFilter"
 		:selected-team="selectedTeam"
 		:refreshing="refreshing"
-		:async-version="dataVersion"
 		@set-type-filter="setTypeFilter"
 		@set-repo="setRepo"
 		@set-team="setTeam"
@@ -31,7 +30,6 @@
 		:current-type-filter="currentTypeFilter"
 		:current-repo="currentRepo"
 		:selected-team="selectedTeam"
-		:async-version="dataVersion"
 		:branches="branches"
 		:user="user"
 		:checkout-status="checkoutStatus"
@@ -103,7 +101,6 @@ export default class App extends Vue {
 	branches: any[]                           = [];
 	refreshing                                = false;
 	loginDisabled                             = false;
-	dataVersion                               = 0;
 	selectedOverlayPr: OverlayPr | null       = null;
 	checkoutStatus: GitWorkspaceStatus | null = null;
 	checkoutStatusLoading                     = false;
@@ -350,9 +347,9 @@ export default class App extends Vue {
 		this.stopChecksPolling();
 		this.refreshing = true;
 		try {
-			GitHubClient.clearAsyncCaches();
+			// Nothing is cleared: the board keeps rendering the cards it has while each record revalidates,
+			// and a card whose pull request has not moved since the last read is not fetched again at all.
 			await this.fetchPRs(this.currentRepo);
-			this.dataVersion++;
 			void this.refreshCheckoutStatus();
 			await this.fetchAndRenderBranches();
 			this.refreshGithubStatus();
@@ -413,7 +410,6 @@ export default class App extends Vue {
 		this._cardDataPending = true;
 		return GitHubClient.fetchPrCardData(this.getVisiblePRs())
 			.then(() => {
-				this.dataVersion++;
 				if (this.getPRsNeedingCheckRefresh().length > 0) {
 					this.startChecksPolling();
 				}
@@ -466,8 +462,7 @@ export default class App extends Vue {
 		}
 
 		try {
-			const changed = await GitHubClient.refreshChecks(needRefresh);
-			this.dataVersion++;
+			const changed         = await GitHubClient.refreshChecks(needRefresh);
 			this._checksPollDelay = changed ? CHECKS_POLL_BASE_MS : Math.min(this._checksPollDelay * 2, CHECKS_POLL_MAX_MS);
 		}
 		catch (error: any) {
@@ -503,7 +498,6 @@ export default class App extends Vue {
 		}
 		finally {
 			this.checkoutStatusLoading = false;
-			this.dataVersion++;
 		}
 	}
 
@@ -598,7 +592,6 @@ export default class App extends Vue {
 	}
 
 	handlePRsChanged() {
-		this.dataVersion++;
 	}
 
 	openPrOverlay(pr: OverlayPr) {

@@ -22,7 +22,7 @@
 			></button>
 		</div>
 		<div class="header-right u-flex u-items-center u-gap-3">
-			<pinned-pr-bar v-if="user" align="right" :async-version="asyncVersion" @open-pr="$emit('open-pr', $event)" />
+			<pinned-pr-bar v-if="user" align="right" @open-pr="$emit('open-pr', $event)" />
 			<select class="repo-select u-fs-13 u-truncate" :value="selectedTeam" @change="onTeamChange">
 				<option value="alpha">Alpha Team</option>
 				<option value="beta">Beta Team</option>
@@ -54,7 +54,6 @@ export default class AppHeader extends Vue {
 	@Prop({ required : true }) readonly selectedTeam!: string;
 	@Prop({ required : true }) readonly refreshing!: boolean;
 	/** Board data counter — lets the pinned strip pick up check state the board already refreshed. */
-	@Prop({ default : 0 }) readonly asyncVersion!: number;
 
 	get refreshBtnHtml(): string {
 		return iconSvg('refresh', 14);

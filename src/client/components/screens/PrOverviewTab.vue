@@ -2,19 +2,13 @@
 	<div class="pr-detail-overview u-flex u-flex-col u-flex-1 u-min-h-0 u-overflow-hidden">
 		<div class="pr-detail-body-grid u-grid u-flex-1 u-min-h-0 u-overflow-y-auto u-items-stretch">
 			<section class="pr-detail-col-section pr-detail-col-main pr-detail-overview-stack u-flex u-flex-col u-min-w-0">
-				<div class="pr-detail-description card pr-detail-overview-gutter u-m-0">
-					<h2 class="u-flex-shrink-0">Description</h2>
-					<div v-if="pr.body" class="pr-detail-body-text markdown-body" v-html="pr.body_html || pr.body"></div>
-					<p v-else class="pr-detail-empty u-flex-shrink-0 u-fs-13 u-text-tertiary">No description provided</p>
-				</div>
-
 				<div class="pr-detail-actions-stats card pr-detail-overview-gutter u-flex u-flex-col u-gap-3 u-m-0">
 					<h2 class="u-flex-shrink-0">Actions &amp; stats</h2>
 					<div v-if="hasConflicts" class="pr-detail-conflict-alert u-flex u-items-center u-gap-2 u-fs-13 u-fw-600">
 						<span class="pr-detail-conflict-dot u-flex-shrink-0"></span>
 						<span>This pull request has merge conflicts</span>
 					</div>
-					<div v-if="showActionsSection" class="pr-detail-action-groups u-flex u-flex-col u-gap-2">
+					<div class="pr-detail-action-groups u-flex u-flex-col u-gap-2">
 						<div v-if="showPrActions" class="pr-detail-action-row u-flex u-flex-wrap u-items-center u-gap-2">
 							<span class="pr-detail-action-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide u-flex-shrink-0">PR Actions</span>
 							<button
@@ -22,7 +16,7 @@
 								type="button"
 								class="pr-overview-action-btn pr-overview-action-approve u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
 								:disabled="approvingPr"
-								title="Approve, clear changes-requested labels, and add ready to merge"
+								title="Approve, clear the α/β/γ review and changes requested labels, and add ready to merge"
 								@click="$emit('approve-pr')"
 							>
 								<span v-if="approvingPr" class="async-loader"></span>
@@ -43,16 +37,6 @@
 									<template v-else>Merge</template>
 								</button>
 							</span>
-							<button
-								v-if="showCloseAction"
-								type="button"
-								class="pr-overview-action-btn pr-overview-action-close u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
-								:disabled="closingPr"
-								@click="$emit('close-pr')"
-							>
-								<span v-if="closingPr" class="async-loader"></span>
-								<template v-else>Close</template>
-							</button>
 							<span
 								v-if="showDraftToggle"
 								class="pr-detail-control-wrap has-tooltip u-inline-flex u-items-center u-relative"
@@ -68,6 +52,16 @@
 									<template v-else>{{ pr.draft ? 'Change to PR' : 'Change to Draft' }}</template>
 								</button>
 							</span>
+							<button
+								v-if="showCloseAction"
+								type="button"
+								class="pr-overview-action-btn pr-overview-action-close u-ml-auto u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
+								:disabled="closingPr"
+								@click="$emit('close-pr')"
+							>
+								<span v-if="closingPr" class="async-loader"></span>
+								<template v-else>Close</template>
+							</button>
 						</div>
 						<div v-if="showGitActions" class="pr-detail-action-row u-flex u-flex-wrap u-items-center u-gap-2">
 							<span class="pr-detail-action-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide u-flex-shrink-0">Git Actions</span>
@@ -127,6 +121,39 @@
 								<span v-if="mergingDefaultBranch" class="async-loader"></span>
 								<template v-else>Merge origin/{{ defaultBranch }}</template>
 							</button>
+							<span v-if="defaultBranchBehindText" class="pr-overview-behind-label u-ml-auto u-fs-12 u-whitespace-nowrap">{{ defaultBranchBehindText }}</span>
+						</div>
+						<div class="pr-detail-action-row u-flex u-flex-wrap u-items-center u-gap-2">
+							<span class="pr-detail-action-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide u-flex-shrink-0">Labels</span>
+							<span v-for="label in pr.labels" :key="label.id" class="pr-detail-label u-inline-flex u-items-center u-gap-1 u-fs-12 u-fw-500 u-whitespace-nowrap" :style="labelStyle(label)">
+								{{ label.name }}
+								<button class="pr-detail-label-remove u-fs-14 u-leading-1 u-cursor-pointer" :title="'Remove ' + label.name" @click="$emit('remove-label', label.name)">&times;</button>
+							</span>
+							<span v-if="!pr.labels.length" class="pr-detail-empty u-flex-shrink-0 u-fs-13 u-text-tertiary">No labels</span>
+							<div class="pr-detail-add-label u-relative">
+								<button
+									type="button"
+									class="pr-detail-compact-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-py-0-5 u-px-2-5 u-fs-11 u-fw-600 u-cursor-pointer"
+									@click="toggleLabelDropdown"
+								>
+									+ Add label
+								</button>
+								<div v-if="labelDropdownOpen" class="pr-detail-label-dropdown u-absolute u-top-full u-left-0 u-mt-1 u-flex u-flex-col u-z-100">
+									<input v-model="labelSearch" class="pr-detail-label-search u-py-2 u-px-3 u-fs-13" placeholder="Filter labels..." @keydown.escape="labelDropdownOpen = false" />
+									<ul class="pr-detail-label-options u-list-none u-overflow-y-auto u-m-0 u-p-0">
+										<li
+											v-for="label in filteredRepoLabels"
+											:key="label.id"
+											class="pr-detail-label-option u-flex u-items-center u-gap-2 u-py-2 u-px-3 u-fs-13 u-text-primary u-cursor-pointer"
+											@click="handleAddLabel(label.name)"
+										>
+											<span class="pr-detail-label-swatch u-flex-shrink-0" :style="{ background : '#' + label.color }"></span>
+											{{ label.name }}
+										</li>
+										<li v-if="!filteredRepoLabels.length" class="pr-detail-label-option pr-detail-label-option-empty u-py-2 u-px-3 u-fs-13 u-text-tertiary">No matching labels</li>
+									</ul>
+								</div>
+							</div>
 						</div>
 					</div>
 					<p v-if="checkoutError" class="pr-overview-checkout-error u-m-0 u-fs-13">{{ checkoutError }}</p>
@@ -202,41 +229,10 @@
 					</div>
 				</div>
 
-				<div class="pr-detail-labels card pr-detail-overview-gutter u-m-0">
-					<h2 class="u-flex-shrink-0">Labels</h2>
-					<div class="pr-detail-labels-list u-flex u-flex-wrap u-gap-1-5 u-mb-3">
-						<span v-for="label in pr.labels" :key="label.id" class="pr-detail-label u-inline-flex u-items-center u-gap-1 u-fs-12 u-fw-500 u-whitespace-nowrap" :style="labelStyle(label)">
-							{{ label.name }}
-							<button class="pr-detail-label-remove u-fs-14 u-leading-1 u-cursor-pointer" :title="'Remove ' + label.name" @click="$emit('remove-label', label.name)">&times;</button>
-						</span>
-						<span v-if="!pr.labels.length" class="pr-detail-empty u-flex-shrink-0 u-fs-13 u-text-tertiary">No labels</span>
-					</div>
-					<div class="pr-detail-add-label u-relative">
-						<div class="pr-detail-add-label-toggle">
-							<button
-								type="button"
-								class="pr-detail-compact-btn u-inline-flex u-items-center u-justify-center u-gap-1-5 u-py-0-5 u-px-2-5 u-fs-11 u-fw-600 u-cursor-pointer"
-								@click="toggleLabelDropdown"
-							>
-+ Add label
-</button>
-						</div>
-						<div v-if="labelDropdownOpen" class="pr-detail-label-dropdown u-absolute u-top-full u-left-0 u-right-0 u-mt-1 u-flex u-flex-col u-z-100">
-							<input v-model="labelSearch" class="pr-detail-label-search u-py-2 u-px-3 u-fs-13" placeholder="Filter labels..." @keydown.escape="labelDropdownOpen = false" />
-							<ul class="pr-detail-label-options u-list-none u-overflow-y-auto u-m-0 u-p-0">
-								<li
-									v-for="label in filteredRepoLabels"
-									:key="label.id"
-									class="pr-detail-label-option u-flex u-items-center u-gap-2 u-py-2 u-px-3 u-fs-13 u-text-primary u-cursor-pointer"
-									@click="handleAddLabel(label.name)"
-								>
-									<span class="pr-detail-label-swatch u-flex-shrink-0" :style="{ background : '#' + label.color }"></span>
-									{{ label.name }}
-								</li>
-								<li v-if="!filteredRepoLabels.length" class="pr-detail-label-option pr-detail-label-option-empty u-py-2 u-px-3 u-fs-13 u-text-tertiary">No matching labels</li>
-							</ul>
-						</div>
-					</div>
+				<div class="pr-detail-description card pr-detail-overview-gutter u-m-0">
+					<h2 class="u-flex-shrink-0">Description</h2>
+					<div v-if="pr.body" class="pr-detail-body-text markdown-body" v-html="pr.body_html || pr.body"></div>
+					<p v-else class="pr-detail-empty u-flex-shrink-0 u-fs-13 u-text-tertiary">No description provided</p>
 				</div>
 			</section>
 
@@ -463,14 +459,16 @@
 </template>
 
 <script lang="ts">
-import type { GitCheckout, GitWorkspaceStatus, LocalPrStatus, PullRequestCheckoutState }             from '@/lib/api/gitCheckoutClient';
-import { checkoutStateForPr, checkoutTargetForPr, defaultBranchForPr } from '@/lib/api/gitCheckoutClient';
-import type { CheckAnnotation, CheckRunDetail, IssueComment, RepoLabel, ReviewComment, TestFailure } from '@/lib/api/githubClient';
-import GitHubClient, { isPullRequestConflicted, stripCommentTypePrefix }                             from '@/lib/api/githubClient';
+import type { GitCheckout, GitWorkspaceStatus, LocalPrStatus, PullRequestCheckoutState } from '@/lib/api/gitCheckoutClient';
+import { checkoutStateForPr, checkoutTargetForPr, defaultBranchForPr }                   from '@/lib/api/gitCheckoutClient';
+import type {
+	CheckAnnotation, CheckRunDetail, IssueComment, PullRequestLocation, RepoLabel, ReviewComment, TestFailure
+} from '@/lib/api/githubClient';
+import GitHubClient, { isPullRequestConflicted, stripCommentTypePrefix } from '@/lib/api/githubClient';
 import type { CommentThread }   from '@/lib/diff/prDiffTypes';
 import { renderGithubMarkdown } from '@/lib/githubMarkdown';
 import { iconSvg }              from '@/lib/icons';
-import { formatDuration, timeAgo, toCursorFileHref } from '@/lib/utils';
+import { formatDuration, timeAgo, toCursorFileHref }                     from '@/lib/utils';
 
 import { Component, Prop, Vue, Watch } from 'vue-facing-decorator';
 
@@ -612,10 +610,6 @@ export default class PrOverviewTab extends Vue {
 		return Boolean(this.pr && this.pr.state === 'open' && !this.pr.merged);
 	}
 
-	get showActionsSection(): boolean {
-		return this.showPrActions || this.showGitActions;
-	}
-
 	get showPrActions(): boolean {
 		return this.showApproveAction || this.showMergeAction || this.showCloseAction || this.showDraftToggle;
 	}
@@ -673,15 +667,38 @@ export default class PrOverviewTab extends Vue {
 		return this.showLocalGitActions && Boolean(this.defaultBranch);
 	}
 
+	/** Commits on the default branch the checkout is missing, or null while that is still unknown. */
+	get defaultBranchBehindCount(): number | null {
+		return this.localPrStatus?.behindDefaultBranchCount ?? null;
+	}
+
+	/** Right-aligned on the Git Actions row; empty while the count is unknown, so nothing is implied. */
+	get defaultBranchBehindText(): string {
+		const behind = this.defaultBranchBehindCount;
+		if (!this.showMergeDefaultBranchAction || behind == null) {
+			return '';
+		}
+		if (behind === 0) {
+			return `Up to date with origin/${this.defaultBranch}`;
+		}
+		return `${behind} commit${behind === 1 ? '' : 's'} behind origin/${this.defaultBranch}`;
+	}
+
 	get mergeDefaultBranchDisabled(): boolean {
-		return this.mergingDefaultBranch || this.committingLocalChanges || this.pushingLocalChanges || Boolean(this.localPrStatus?.hasLocalChanges);
+		if (this.mergingDefaultBranch || this.committingLocalChanges || this.pushingLocalChanges) {
+			return true;
+		}
+		return this.defaultBranchBehindCount === 0 || Boolean(this.localPrStatus?.hasLocalChanges);
 	}
 
 	get mergeDefaultBranchTitle(): string {
+		if (this.defaultBranchBehindCount === 0) {
+			return `Already up to date with origin/${this.defaultBranch}`;
+		}
 		if (this.localPrStatus?.hasLocalChanges) {
 			return `Commit or discard local changes before merging origin/${this.defaultBranch}`;
 		}
-		return `Merge the latest origin/${this.defaultBranch} into the checked-out pull request branch`;
+		return `Pull the checked-out pull request branch, then merge the latest origin/${this.defaultBranch} into it`;
 	}
 
 	get worktreeOptions(): GitCheckout[] {
@@ -848,6 +865,11 @@ export default class PrOverviewTab extends Vue {
 		return renderGithubMarkdown(stripCommentTypePrefix(body));
 	}
 
+	/** Which pull request this thread belongs to, so resolving writes straight into that record. */
+	get prLocation(): PullRequestLocation {
+		return { owner : this.owner, repo : this.repo, number : this.prNumber };
+	}
+
 	async toggleThreadResolved(thread: OverviewThread) {
 		const nodeId = thread.threadNodeId;
 		if (!nodeId || this.resolveTogglingThreadId != null) {
@@ -855,7 +877,7 @@ export default class PrOverviewTab extends Vue {
 		}
 		this.resolveTogglingThreadId = thread.id;
 		try {
-			await GitHubClient.setReviewThreadResolved(nodeId, !thread.resolved);
+			await GitHubClient.setReviewThreadResolved(nodeId, !thread.resolved, this.prLocation);
 			this.$emit('comments-updated');
 		}
 		catch (e: any) {
@@ -1262,6 +1284,10 @@ export default class PrOverviewTab extends Vue {
 	border: none !important;
 	background: var(--accent-orange) !important;
 	color: var(--btn-primary-fg) !important;
+}
+
+.pr-overview-behind-label {
+	color: var(--text-tertiary);
 }
 
 .pr-overview-worktree-select {
@@ -1875,6 +1901,7 @@ html[data-color-scheme="light"] .pr-detail-overview .card > h2 {
 }
 
 .pr-detail-label-dropdown {
+	min-width: 240px;
 	background: var(--bg-primary);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-md);

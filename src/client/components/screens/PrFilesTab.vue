@@ -46,7 +46,14 @@
 				:show-viewed-controls="viewedEnabled"
 				:show-render-toggle="canRenderMarkdown"
 				@toggle-viewed="toggleViewed"
+				@pair-files="$emit('pair-files', $event)"
+				@unpair-files="$emit('unpair-files', $event)"
 			/>
+
+			<p v-if="pairError" class="pr-files-pair-error u-flex u-items-center u-gap-2 u-fs-13 u-m-0">
+				<span class="u-flex-1 u-min-w-0">{{ pairError }}</span>
+				<button type="button" class="pr-files-pair-error-close u-flex-shrink-0 u-cursor-pointer" aria-label="Dismiss" @click="$emit('dismiss-pair-error')">&times;</button>
+			</p>
 
 			<div v-if="contentLoading" class="pr-diff-content-loading"><span class="async-loader"></span> Loading file contents...</div>
 
@@ -226,7 +233,7 @@ import PrFileSearchBar                        from '@/components/pr/PrFileSearch
 import PrFilesNavBar                          from '@/components/pr/PrFilesNavBar.vue';
 import PrMarkdownDiff                         from '@/components/pr/PrMarkdownDiff.vue';
 import PrMediaViewer                          from '@/components/pr/PrMediaViewer.vue';
-import type { PendingComment, PRFile, ReviewComment } from '@/lib/api/githubClient';
+import type { PendingComment, PRFile, PullRequestLocation, ReviewComment }                       from '@/lib/api/githubClient';
 import GitHubClient                           from '@/lib/api/githubClient';
 import { parseCommentType }                   from '@/lib/api/githubClient';
 import { buildConnectorPaths, buildScrollSegmentsFromState, maxVirtualScrollTop, resolveScroll } from '@/lib/api/usePrDiffVirtualScroll';
@@ -255,7 +262,7 @@ export type PrFileContentLoader = (file: PRFile) => Promise<PrFileContent>;
 
 @Component({
 	components : { DiffMinimap, PrDiffTable, PrFileSearchBar, PrFilesNavBar, PrMarkdownDiff, PrMediaViewer },
-	emits      : [ 'update:fileIndex', 'update:viewed', 'all-viewed', 'add-pending', 'remove-pending', 'edit-pending', 'comments-updated', 'thread-focus-handled' ],
+	emits      : [ 'update:fileIndex', 'update:viewed', 'all-viewed', 'add-pending', 'remove-pending', 'edit-pending', 'comments-updated', 'thread-focus-handled', 'pair-files', 'unpair-files', 'dismiss-pair-error' ],
 })
 export default class PrFilesTab extends Vue {
 
@@ -273,6 +280,8 @@ export default class PrFilesTab extends Vue {
 	@Prop({ default : 12 }) readonly diffFontSize!: number;
 	@Prop({ default : () => ({}) }) readonly viewedFiles!: Record<string, string>;
 	@Prop({ default : '' }) readonly prNodeId!: string;
+	/** Why the reader's last forced file pairing could not be built, if it could not. */
+	@Prop({ default : '' }) readonly pairError!: string;
 	@Prop({ default : () => [] }) readonly reviewComments!: ReviewComment[];
 	@Prop({ default : () => [] }) readonly pendingComments!: PendingComment[];
 	@Prop({ default : '' }) readonly commitId!: string;
@@ -311,6 +320,14 @@ export default class PrFilesTab extends Vue {
 
 	activeComment: { path: string; line: number; side: 'LEFT' | 'RIGHT'; rect: DOMRect; lineContent: string } | null = null;
 
+	/**
+	 * Diffs already assembled for this tab, keyed by the commits they were read at. The key is what makes the
+	 * cache safe to keep across a refresh: a new head commit is a new key, so a list that came back unchanged
+	 * hits every entry and the reader's file is on screen without a request or a flash of empty panes.
+	 *
+	 * Not used for the local-files tab. Its content comes from the worktree, which changes under the app with
+	 * no commit to key on, so there is nothing here that could be trusted to still be true.
+	 */
 	private _contentCache = new Map<string, PrFileContent>();
 	private _loadId       = 0;
 	private _resizeHandler = () => {
@@ -330,6 +347,11 @@ export default class PrFilesTab extends Vue {
 	// returns whatever the field was initialized to; only method calls reach the live component from there.
 	private _searchKeyHandler: ((e: KeyboardEvent) => void) | null = null;
 	private _popoverClickOutside: ((e: MouseEvent) => void) | null = null;
+
+	/** Which pull request a viewed-mark belongs to, so the mutation can write straight into its record. */
+	get prLocation(): PullRequestLocation {
+		return { owner : this.owner, repo : this.repo, number : this.prNumber };
+	}
 
 	get currentFile(): PRFile {
 		return this.files[this.currentIndex] || this.files[0];
@@ -409,10 +431,10 @@ export default class PrFilesTab extends Vue {
 		try {
 			for (const path of paths) {
 				if (wasViewed) {
-					await GitHubClient.unmarkFileAsViewed(this.prNodeId, path);
+					await GitHubClient.unmarkFileAsViewed(this.prNodeId, path, this.prLocation);
 				}
 				else {
-					await GitHubClient.markFileAsViewed(this.prNodeId, path);
+					await GitHubClient.markFileAsViewed(this.prNodeId, path, this.prLocation);
 				}
 			}
 		}
@@ -637,13 +659,13 @@ export default class PrFilesTab extends Vue {
 
 	@Watch('files', { immediate : true })
 	onFilesChanged(_files: PRFile[], previousFiles?: PRFile[]) {
-		// A refresh hands over a brand new array, so the cached diffs are dropped and re-read from the
-		// refreshed head. Note which file was open first, to put the reader back on it below.
+		// Note which file was open first, to put the reader back on it below. The assembled diffs are keyed by
+		// the commits they were read at, so a refresh that returned the same head keeps every one of them;
+		// only the worktree's own content, which has no commit to key on, is dropped here.
 		const previousPath = previousFiles?.[this.currentIndex]?.filename;
-		this._contentCache.clear();
-		this.baseContent      = null;
-		this.headContent      = null;
-		this.contentEncoding  = 'text';
+		if (this.fileContentLoader) {
+			this._contentCache.clear();
+		}
 		this.virtualScrollTop = 0;
 		if (!this._filesInitialized && this.files.length) {
 			this._filesInitialized = true;
@@ -652,10 +674,20 @@ export default class PrFilesTab extends Vue {
 		}
 		else {
 			const restoredIndex = previousPath ? this.indexForFilename(previousPath) : -1;
-			this.currentIndex   = restoredIndex >= 0 ? restoredIndex : 0;
+			// A file that was just paired with another is gone from the list under its own name, so fall
+			// back to the entry that absorbed it rather than throwing the reader back to the first file.
+			const mergedIndex = restoredIndex >= 0 || !previousPath ? -1 : this.files.findIndex(file => file.previous_filename === previousPath);
+			this.currentIndex = Math.max(restoredIndex, mergedIndex, 0);
 		}
 		if (this.files.length) {
 			this.loadFileContent();
+		}
+		else {
+			// Nothing left to show — this is the one case that still has to blank the panes, since no load
+			// will follow to replace what they are rendering.
+			this.baseContent     = null;
+			this.headContent     = null;
+			this.contentEncoding = 'text';
 		}
 	}
 
@@ -928,7 +960,7 @@ export default class PrFilesTab extends Vue {
 		}
 
 		const loadId   = ++this._loadId;
-		const cacheKey = file.filename;
+		const cacheKey = `${this.baseRef}:${this.headRef}:${file.filename}`;
 		const cached   = this._contentCache.get(cacheKey);
 		if (cached) {
 			this.baseContent     = cached.base;
@@ -1761,5 +1793,23 @@ export default class PrFilesTab extends Vue {
 	.pr-files-skeleton-minimap {
 		display: none;
 	}
+}
+
+.pr-files-pair-error {
+	padding: 8px 12px;
+	margin: 6px 0 0;
+	color: var(--accent-red);
+	background: var(--danger-bg-subtle);
+	border: 1px solid var(--danger-border);
+	border-radius: var(--radius-sm);
+}
+
+.pr-files-pair-error-close {
+	padding: 0 4px;
+	border: none;
+	background: transparent;
+	color: inherit;
+	font-size: 16px;
+	line-height: 1;
 }
 </style>

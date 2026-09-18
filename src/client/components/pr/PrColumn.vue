@@ -11,7 +11,6 @@
 				:pr="pr"
 				:hidden-labels="hiddenLabels"
 				:show-repo="showRepo"
-				:async-version="asyncVersion"
 				:checkout-status="checkoutStatus"
 				@open-pr="$emit('open-pr', $event)"
 			/>
@@ -33,7 +32,6 @@ export default class PrColumn extends Vue {
 	@Prop({ default : () => new Set<string>() }) readonly hiddenLabels!: Set<string>;
 	@Prop({ required : true }) readonly section!: string;
 	@Prop({ required : true }) readonly showRepo!: boolean;
-	@Prop({ required : true }) readonly asyncVersion!: number;
 	@Prop({ default : null }) readonly checkoutStatus!: GitWorkspaceStatus | null;
 
 	dropOver = false;

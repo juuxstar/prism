@@ -49,17 +49,17 @@ export class GitApi extends DecoratedRouter {
 
 	@Post('/local-status')
 	async localStatus(req: Request, res: Response) {
-		res.json(await this.authorizedGitService(req.headers.authorization).fetchLocalPullRequestStatus(req.body?.pr || {}));
+		res.json(await this.authorizedGitService(req.headers.authorization).fetchLocalPullRequestStatus(req.body?.pr || {}, req.body?.defaultBranch));
 	}
 
 	@Post('/commit')
 	async commit(req: Request, res: Response) {
-		res.json(await this.authorizedGitService(req.headers.authorization).commitLocalPullRequestChanges(req.body?.pr || {}, req.body?.message));
+		res.json(await this.authorizedGitService(req.headers.authorization).commitLocalPullRequestChanges(req.body?.pr || {}, req.body?.message, req.body?.defaultBranch));
 	}
 
 	@Post('/push')
 	async push(req: Request, res: Response) {
-		res.json(await this.authorizedGitService(req.headers.authorization).pushLocalPullRequestChanges(req.body?.pr || {}));
+		res.json(await this.authorizedGitService(req.headers.authorization).pushLocalPullRequestChanges(req.body?.pr || {}, req.body?.defaultBranch));
 	}
 
 	@Post('/merge-default-branch')

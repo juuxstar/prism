@@ -7,9 +7,9 @@
 		@close="$emit('close')"
 	>
 		<p class="pr-merge-confirm-body">
-			This will fetch and merge the latest <strong>origin/{{ defaultBranch }}</strong> into
-			<strong>{{ headRef }}</strong> in the local checkout
-			<span class="pr-merge-confirm-repo">{{ checkoutLabel }}</span>.
+			This will pull the latest <strong>{{ headRef }}</strong> in the local checkout
+			<span class="pr-merge-confirm-repo">{{ checkoutLabel }}</span>, then merge the latest
+			<strong>origin/{{ defaultBranch }}</strong> into it.
 		</p>
 		<p class="pr-merge-confirm-body">
 			The merge commit stays local until you push it. If the merge conflicts it is rolled back and the

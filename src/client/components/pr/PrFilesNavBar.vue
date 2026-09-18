@@ -30,19 +30,28 @@
 				<span class="pr-files-dropdown-filename u-truncate u-flex-1 u-text-center">{{ currentFile.filename }}</span>
 			</button>
 			<ul v-if="dropdownOpen" class="pr-files-dropdown-list" :style="dropdownListMaxHeightPx != null ? { maxHeight : `${dropdownListMaxHeightPx}px` } : undefined">
+				<li v-if="pairingSource" class="pr-files-pairing-hint u-flex u-items-center u-gap-2 u-fs-12">
+					<span class="u-flex-1 u-min-w-0 u-truncate">Pick the file <strong>{{ pairingSource.filename }}</strong> pairs with</span>
+					<button type="button" class="pr-files-pairing-cancel u-flex-shrink-0 u-fs-11 u-fw-600 u-cursor-pointer" @click.stop="pairingSource = null">Cancel</button>
+				</li>
 				<li
-					v-for="(file, i) in files"
+					v-for="{ file, index, pairButton, dimmed } in dropdownRows"
 					:key="file.filename"
 					class="pr-files-dropdown-item u-flex u-items-center u-gap-2 u-fs-13 u-font-mono u-text-primary u-cursor-pointer"
-					:class="{ active : i === currentIndex }"
-					@click="
-						currentIndex = i;
-						dropdownOpen = false;
-					"
+					:class="{ active : index === currentIndex, 'pairing-dimmed' : dimmed }"
+					@click="onDropdownItemClick(file, index)"
 				>
 					<span v-if="showViewedControls" class="pr-files-dropdown-viewed u-flex-shrink-0" :class="{ checked : viewedFiles[file.filename] === 'VIEWED' }">✓</span>
 					<span class="file-status-icon u-flex-shrink-0" :class="'file-status-' + file.status">{{ fileStatusSymbol(file.status) }}</span>
 					<span class="pr-files-dropdown-item-name u-truncate u-flex-1 u-min-w-0">{{ file.previous_filename ? file.previous_filename + " → " : "" }}{{ file.filename }}</span>
+					<button
+						v-if="pairButton"
+						type="button"
+						class="pr-files-pair-btn u-flex-shrink-0 u-cursor-pointer"
+						:class="{ armed : pairingSource?.filename === file.filename }"
+						:title="pairButton.title"
+						@click.stop="onPairButtonClick(file)"
+					>{{ pairButton.symbol }}</button>
 					<span class="pr-files-dropdown-item-stats u-flex u-gap-1-5 u-flex-shrink-0 u-ml-2">
 						<span class="pr-files-dropdown-item-add">+{{ file.additions }}</span>
 						<span class="pr-files-dropdown-item-del">&minus;{{ file.deletions }}</span>
@@ -117,7 +126,17 @@ const props = defineProps<{
 const currentIndex   = defineModel<number>('currentIndex', { required : true });
 const renderMarkdown = defineModel<boolean>('renderMarkdown', { default : false });
 
-const emit = defineEmits<{ toggleViewed: [] }>();
+const emit = defineEmits<{
+	toggleViewed: [];
+	pairFiles: [ { removed: string; added: string } ];
+	unpairFiles: [ { removed: string; added: string } ];
+}>();
+
+/**
+ * The file waiting for a partner, while the reader is choosing one. Only a deletion or an addition can
+ * start this, and only the opposite kind can finish it, so the pair always has one of each.
+ */
+const pairingSource = ref<PRFile | null>(null);
 
 const dropdownOpen       = ref(false);
 const dropdownTriggerRef = ref<HTMLButtonElement | null>(null);
@@ -152,8 +171,77 @@ function onDropdownTriggerClick() {
 watch(dropdownOpen, open => {
 	if (!open) {
 		dropdownListMaxHeightPx.value = null;
+		pairingSource.value           = null;
 	}
 });
+
+function canPairWith(file: PRFile): boolean {
+	const source = pairingSource.value;
+	if (!source || file.filename === source.filename) {
+		return false;
+	}
+	return source.status === 'removed' ? file.status === 'added' : file.status === 'removed';
+}
+
+/** The pair button this row gets, if any: one to start a pairing, or one to undo a forced pair. */
+function pairButtonFor(file: PRFile): { symbol: string; title: string } | null {
+	if (file.forcedRename) {
+		return { symbol : '⇄', title : `Stop comparing ${file.previous_filename} with ${file.filename}` };
+	}
+	if (file.status !== 'added' && file.status !== 'removed') {
+		return null;
+	}
+	if (pairingSource.value) {
+		if (file.filename === pairingSource.value.filename) {
+			return { symbol : '⇄', title : 'Cancel this pairing' };
+		}
+		return canPairWith(file) ? { symbol : '⇄', title : `Compare with ${pairingSource.value.filename}` } : null;
+	}
+	return { symbol : '⇄', title : 'Compare this file with another added or deleted file' };
+}
+
+function onPairButtonClick(file: PRFile) {
+	if (pairingSource.value?.filename === file.filename) {
+		pairingSource.value = null;
+		return;
+	}
+	if (file.forcedRename && file.previous_filename) {
+		emit('unpairFiles', { removed : file.previous_filename, added : file.filename });
+		pairingSource.value = null;
+		dropdownOpen.value  = false;
+		return;
+	}
+	const source = pairingSource.value;
+	if (!source) {
+		pairingSource.value = file;
+		return;
+	}
+	if (canPairWith(file)) {
+		const removed = source.status === 'removed' ? source : file;
+		const added   = source.status === 'removed' ? file : source;
+		emit('pairFiles', { removed : removed.filename, added : added.filename });
+		pairingSource.value = null;
+		dropdownOpen.value  = false;
+	}
+}
+
+/** While a partner is being chosen, clicking a row picks it rather than navigating to it. */
+function onDropdownItemClick(file: PRFile, index: number) {
+	if (pairingSource.value) {
+		onPairButtonClick(file);
+		return;
+	}
+	currentIndex.value = index;
+	dropdownOpen.value = false;
+}
+
+/** One row per file, with its pairing affordances worked out once rather than per binding. */
+const dropdownRows = computed(() => props.files.map((file, index) => ({
+	file,
+	index,
+	pairButton : pairButtonFor(file),
+	dimmed     : Boolean(pairingSource.value) && !canPairWith(file),
+})));
 
 const currentFile = computed(() => props.files[currentIndex.value] ?? props.files[0]);
 
@@ -429,6 +517,51 @@ onBeforeUnmount(() => {
 
 .pr-files-dropdown-viewed.checked {
 	color: var(--accent-green);
+}
+
+.pr-files-dropdown-item.pairing-dimmed {
+	opacity: 0.4;
+}
+
+.pr-files-pairing-hint {
+	padding: var(--u-1-5) var(--u-2-5);
+	margin-bottom: 4px;
+	border-bottom: 1px solid var(--border);
+	color: var(--text-secondary);
+}
+
+.pr-files-pairing-cancel {
+	padding: 2px 8px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--bg-primary);
+	color: var(--text-secondary);
+
+	&:hover {
+		border-color: var(--border-hover);
+		color: var(--text-primary);
+	}
+}
+
+.pr-files-pair-btn {
+	width: 22px;
+	padding: 0;
+	border: 1px solid transparent;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--text-tertiary);
+	font-size: 13px;
+	line-height: 20px;
+
+	&:hover {
+		border-color: var(--border-hover);
+		color: var(--text-primary);
+	}
+
+	&.armed {
+		border-color: var(--accent-blue);
+		color: var(--accent-blue);
+	}
 }
 
 .pr-files-dropdown-item-stats {

@@ -75,11 +75,7 @@ export default class PinnedPrBar extends Vue {
 
 	/** Which edge the hover panel hangs from; right-align it when the strip sits near the right of the header. */
 	@Prop({ default : 'left' }) readonly align!: 'left' | 'right';
-	/** Bumped by a host that refreshes checks itself, so its newer data shows without waiting for the next poll. */
-	@Prop({ default : 0 }) readonly asyncVersion!: number;
-
 	openPopoverId: number | null = null;
-	dataVersion                  = 0;
 
 	private _pollTimer: ReturnType<typeof setTimeout> | null = null;
 	private _pollDelay                                       = POLL_BASE_MS;
@@ -95,14 +91,6 @@ export default class PinnedPrBar extends Vue {
 	onPinsChanged() {
 		// A newly pinned PR has no rollup yet on a page that never listed it; poll now rather than in 30s.
 		this.restartPolling();
-	}
-
-	@Watch('asyncVersion')
-	onAsyncVersionChanged() {
-		// A host that just dropped the shared caches (its Refresh button) leaves pins with nothing to show.
-		if (this.pins.some(pin => !GitHubClient.getChecks(pin.id))) {
-			this.restartPolling();
-		}
 	}
 
 	mounted() {
@@ -127,8 +115,6 @@ export default class PinnedPrBar extends Vue {
 	}
 
 	checksFor(pin: PinnedPr): ChecksSummary | null {
-		void this.dataVersion;
-		void this.asyncVersion;
 		return GitHubClient.getChecks(pin.id);
 	}
 
@@ -225,7 +211,6 @@ export default class PinnedPrBar extends Vue {
 				repo   : pin.repo,
 				number : pin.number,
 			})));
-			this.dataVersion++;
 			// Merged PRs leave the strip here; that mutation restarts polling, which is what the guard below is for.
 			states.forEach(syncPinnedPr);
 			const changed   = states.some(state => state.checksChanged || state.merged);

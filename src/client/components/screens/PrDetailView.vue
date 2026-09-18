@@ -29,6 +29,12 @@
 									<span class="u-flex u-items-center u-justify-center" aria-hidden="true" v-html="$icon('pencil', 14)"></span>
 								</button>
 							</div>
+							<span
+								v-if="checkoutBadgeText"
+								class="pr-detail-checkout-badge u-flex-shrink-0 u-fs-11 u-fw-600 u-whitespace-nowrap"
+								:class="checkoutBadgeClass"
+								:title="checkoutBadgeTitle"
+								>{{ checkoutBadgeText }}</span>
 						</div>
 					</div>
 					<div class="pr-detail-header-center u-flex u-items-center u-justify-center u-flex-1">
@@ -64,7 +70,7 @@
 						>
 							<span class="u-flex u-items-center u-justify-center" aria-hidden="true" v-html="$icon('pin', 14)"></span>
 						</button>
-						<pinned-pr-bar align="right" :async-version="pinnedChecksVersion" @open-pr="openPinnedPr" />
+						<pinned-pr-bar align="right" @open-pr="openPinnedPr" />
 						<a
 							v-if="cursorCheckoutHref && activeTab !== 'overview'"
 							:href="cursorCheckoutHref"
@@ -177,7 +183,7 @@
 						:files-loading="filesLoading"
 						:owner="owner"
 						:repo="repo"
-						:base-ref="pr.base.sha"
+						:base-ref="prFilesBaseRef"
 						:head-ref="pr.head.sha"
 						:initial-file-index="initialFileIndex"
 						:thread-focus-request="pendingThreadFocus"
@@ -199,6 +205,10 @@
 						@comments-updated="onCommentsUpdated"
 						@thread-focus-handled="onThreadFocusHandled"
 						@all-viewed="onAllFilesViewed"
+						:pair-error="filePairError"
+						@pair-files="forceFilePair"
+						@unpair-files="unforceFilePair"
+						@dismiss-pair-error="filePairError = ''"
 					/>
 				</div>
 			</div>
@@ -325,22 +335,33 @@ import {
 	fetchLocalPullRequestFileContent, fetchLocalPullRequestFiles, fetchLocalPullRequestStatus, mergeDefaultBranchIntoPullRequest,
 	pushLocalPullRequestChanges, resetWorktreeToNaturalBranch
 } from '@/lib/api/gitCheckoutClient';
-import type { AsyncMergeResult, CheckRunDetail, IssueComment, PendingComment, PRFile, RepoLabel, ReviewComment } from '@/lib/api/githubClient';
+import type {
+	AsyncMergeResult, CheckRunDetail, IssueComment, PendingComment, PRFile, PullRequestLocation, RepoLabel, ReviewComment
+} from '@/lib/api/githubClient';
 import GitHubClient                             from '@/lib/api/githubClient';
 import { isWhitespaceOnlyFileChange }           from '@/lib/diff/patchDiff';
 import { detectRenamedFiles }                   from '@/lib/diff/renameDetection';
+import type { ForcedFilePair, ForcedPairScope } from '@/lib/forcedFilePairs';
+import { addForcedFilePair, loadForcedFilePairs, removeForcedFilePair }                            from '@/lib/forcedFilePairs';
 import { loadLocalViewedFiles, setLocalFileViewed } from '@/lib/localViewedFiles';
 import { loadPendingReview, savePendingReview } from '@/lib/pendingReviewStorage';
 import { isPinned, syncPinnedPr, togglePinnedPr } from '@/lib/pinnedPrs';
+import { diffVersion, prDetails, prKey }        from '@/lib/store/prStore';
 import type { ResolvedScheme }                  from '@/lib/theme/colorScheme';
 import { getResolvedScheme, subscribeColorScheme } from '@/lib/theme/colorScheme';
-import { getDiffFontSize, getDiffTabSize, setDiffFontSize, setDiffTabSize, subscribeDiffSettings }               from '@/lib/theme/diffSettings';
+import { getDiffFontSize, getDiffTabSize, setDiffFontSize, setDiffTabSize, subscribeDiffSettings } from '@/lib/theme/diffSettings';
 import { getStoredHljsThemeId, loadHljsTheme, setStoredHljsThemeId } from '@/lib/theme/hljsTheme';
 import { timeAgo, toCursorFileHref }            from '@/lib/utils';
 
 import { Component, Prop, Vue, Watch } from 'vue-facing-decorator';
 
 type PrDetailTab = 'overview' | 'local-files' | 'pr-files';
+
+/** Review labels the Approve action clears, matching the board's `α/β/γ: review|changes requested` set. */
+const TEAM_REQUESTED_LABEL = /^\s*[\u03b1\u03b2\u03b3]\s*:\s*(?:review|changes)[\s-]+requested\s*$/i;
+
+/** Label the Approve action adds once the requested-review labels are gone. */
+const READY_TO_MERGE_LABEL = 'ready to merge';
 
 @Component({
 	components : {
@@ -369,12 +390,15 @@ export default class PrDetailView extends Vue {
 	@Prop({ required : true }) readonly tab!: string;
 	@Prop({ default : false }) readonly embedded!: boolean;
 
-	pr: any                                  = null;
 	checks: CheckRunDetail[]                 = [];
 	repoLabels: RepoLabel[]                  = [];
 	files: PRFile[]                          = [];
 	localFiles: PRFile[]                     = [];
 	localViewedFiles: Record<string, string> = {};
+	/** Deletion/addition pairs the reader told PRism to compare, whatever its own detection concluded. */
+	forcedFilePairs: ForcedFilePair[]        = [];
+	/** Why the last pairing the reader asked for could not be built; shown above the diff until dismissed. */
+	filePairError          = '';
 	loading                = true;
 	checksLoading          = true;
 	filesLoading           = false;
@@ -422,14 +446,12 @@ export default class PrDetailView extends Vue {
 	defaultBranchMergeConfirmOpen             = false;
 	defaultBranchMergeError                   = '';
 	refreshing                                = false;
-	/** Bumped whenever this view drops the shared caches, so the pinned strip refills instead of blanking out. */
-	pinnedChecksVersion    = 0;
-	checkoutError          = '';
-	localGitError          = '';
-	localCommitModalOpen   = false;
-	localCommitMessage     = '';
-	localCommitError       = '';
-	commitAndPushRequested = false;
+	checkoutError                             = '';
+	localGitError                             = '';
+	localCommitModalOpen                      = false;
+	localCommitMessage                        = '';
+	localCommitError                          = '';
+	commitAndPushRequested                    = false;
 	/** When set while the PR Files tab is shown, selects the diff file and focuses the comment thread there. Cleared after the tab handles it. */
 	pendingThreadFocus: null | { path: string; line: number; side: 'LEFT' | 'RIGHT'; nonce: number } = null;
 
@@ -437,8 +459,13 @@ export default class PrDetailView extends Vue {
 	_unsubColorScheme: (() => void) | null              = null;
 	_unsubDiffSettings: (() => void) | null             = null;
 	_onDocumentVisibility: (() => void) | null          = null;
-	_originalTitle                                = '';
-	mergePollCancelled                            = false;
+	_originalTitle     = '';
+	mergePollCancelled = false;
+	/** GitHub's own file list, before PRism merges renamed pairs into it. */
+	_rawPrFiles: PRFile[]                        = [];
+	/** Commit the pull request's diff is computed against; empty until resolved, and `base.sha` if it cannot be. */
+	mergeBaseSha                                 = '';
+	_mergeBaseShaPromise: Promise<string> | null  = null;
 	_loadFilesPromise: Promise<void> | null       = null;
 	_loadLocalFilesPromise: Promise<void> | null  = null;
 	_loadViewedStatePromise: Promise<void> | null = null;
@@ -499,6 +526,16 @@ export default class PrDetailView extends Vue {
 
 	get prNumber(): number {
 		return parseInt(this.number, 10);
+	}
+
+	/**
+	 * The pull request itself, read from its record rather than copied into this component. Every view
+	 * showing this pull request renders the same object, so a label added here, a title edited there or a
+	 * poll that found a merge lands everywhere at once — and coming back to a PR already read renders it
+	 * immediately, with the revalidation happening behind what is already on screen.
+	 */
+	get pr(): any {
+		return prDetails.peek(prKey(this.owner, this.repo, this.prNumber))?.data ?? null;
 	}
 
 	/**
@@ -583,6 +620,38 @@ export default class PrDetailView extends Vue {
 
 	get checkoutState(): PullRequestCheckoutState | null {
 		return checkoutStateForPr(this.pr, this.checkoutStatus);
+	}
+
+	get checkoutWorkspaceReady(): boolean {
+		return this.checkoutStatus?.mode === 'single' || this.checkoutStatus?.mode === 'worktree-parent';
+	}
+
+	/** Header badge: whether this PR is checked out locally and, when it is, which worktree holds it. */
+	get checkoutBadgeText(): string {
+		const state = this.checkoutState;
+		if (state) {
+			return state.isMain ? 'Checked out' : `Checked out: ${state.label}`;
+		}
+		// Without a configured workspace there is nothing to be checked out into, so say nothing at all.
+		return this.checkoutWorkspaceReady ? 'Not checked out' : '';
+	}
+
+	get checkoutBadgeClass(): string {
+		const state = this.checkoutState;
+		if (!state) {
+			return 'pr-detail-checkout-badge-none';
+		}
+		return state.shaMatches ? 'pr-detail-checkout-badge-current' : 'pr-detail-checkout-badge-stale';
+	}
+
+	get checkoutBadgeTitle(): string {
+		const state = this.checkoutState;
+		if (!state) {
+			const dir = this.checkoutStatus?.hostWorkspaceDir || this.checkoutStatus?.workspaceDir;
+			return dir ? `Not checked out in ${dir}` : 'Not checked out';
+		}
+		const freshness = state.shaMatches ? 'At PR head' : 'Branch is checked out but not at the latest PR head';
+		return `${freshness} in ${state.hostPath || state.path}`;
 	}
 
 	get cursorCheckoutPath(): string {
@@ -752,7 +821,6 @@ export default class PrDetailView extends Vue {
 				GitHubClient.fetchPRDetail(this.owner, this.repo, this.prNumber, true),
 				GitHubClient.fetchPullRequestReviewDecision(this.owner, this.repo, this.prNumber),
 			]);
-			this.pr             = pr;
 			this.reviewDecision = decision;
 			syncPinnedPr(pr);
 			void this.refreshCheckoutStatus();
@@ -797,11 +865,15 @@ export default class PrDetailView extends Vue {
 	/** Reload PR + related data without the full-page loading overlay (e.g. after merge completes). */
 	private async refreshMergedPullRequest(mergedPr?: any): Promise<void> {
 		try {
+			// A payload already in hand is written into the record rather than read back out of GitHub — the
+			// view renders from that record, so this is what puts the merged state on screen.
+			if (mergedPr) {
+				GitHubClient.recordPullRequest(this.owner, this.repo, this.prNumber, mergedPr);
+			}
 			const [ pr, decision ] = await Promise.all([
 				mergedPr || GitHubClient.fetchPRDetail(this.owner, this.repo, this.prNumber, true),
-				GitHubClient.fetchPullRequestReviewDecision(this.owner, this.repo, this.prNumber),
+				GitHubClient.fetchPullRequestReviewDecision(this.owner, this.repo, this.prNumber, true),
 			]);
-			this.pr             = pr;
 			this.reviewDecision = decision;
 			syncPinnedPr(pr);
 			document.title = `#${this.routeBackedPrNumber} ${this.pr.title}`;
@@ -816,9 +888,9 @@ export default class PrDetailView extends Vue {
 			if (pr.user?.login) {
 				await GitHubClient.fetchUserFirstNames([ pr.user.login ]);
 			}
-			this.loadChecks();
+			this.loadChecks(true);
 			this.loadRepoLabels();
-			this.loadReviewComments();
+			void this.loadReviewComments(true);
 			void this.refreshCheckoutStatus();
 			void this.refreshLocalPrStatus();
 			if (this.activeTab === 'pr-files') {
@@ -900,14 +972,18 @@ export default class PrDetailView extends Vue {
 	}
 
 	async loadAll() {
-		this.loading = true;
-		this.error   = '';
+		// The overlay is for having nothing to show, not for being busy. Returning to a pull request whose
+		// record is already held renders it at once and revalidates behind it.
+		this.loading              = !this.pr;
+		this.error                = '';
+		this.forcedFilePairs      = loadForcedFilePairs(this.forcedPairScope);
+		this._mergeBaseShaPromise = null;
+		this.mergeBaseSha         = '';
 		try {
 			const [ pr, decision ] = await Promise.all([
 				GitHubClient.fetchPRDetail(this.owner, this.repo, this.prNumber),
 				GitHubClient.fetchPullRequestReviewDecision(this.owner, this.repo, this.prNumber),
 			]);
-			this.pr             = pr;
 			this.reviewDecision = decision;
 			syncPinnedPr(pr);
 			document.title = `#${this.routeBackedPrNumber} ${this.pr.title}`;
@@ -954,14 +1030,14 @@ export default class PrDetailView extends Vue {
 		}
 		this.refreshing = true;
 		this.error      = '';
-		GitHubClient.clearAsyncCaches();
-		this.pinnedChecksVersion++;
 		try {
+			// Nothing is dropped here. Each read is told to revalidate, and its record keeps the data it
+			// already had until GitHub hands back something different — so the screen is never emptied, and
+			// anything that did not actually change is not re-fetched, re-parsed or re-rendered.
 			const [ pr, decision ] = await Promise.all([
-				GitHubClient.fetchPRDetail(this.owner, this.repo, this.prNumber),
-				GitHubClient.fetchPullRequestReviewDecision(this.owner, this.repo, this.prNumber),
+				GitHubClient.fetchPRDetail(this.owner, this.repo, this.prNumber, true),
+				GitHubClient.fetchPullRequestReviewDecision(this.owner, this.repo, this.prNumber, true),
 			]);
-			this.pr             = pr;
 			this.reviewDecision = decision;
 			syncPinnedPr(pr);
 			document.title = `#${this.routeBackedPrNumber} ${this.pr.title}`;
@@ -977,8 +1053,8 @@ export default class PrDetailView extends Vue {
 				await GitHubClient.fetchUserFirstNames([ pr.user.login ]);
 			}
 			await Promise.all([
-				this.loadChecks(),
-				this.loadRepoLabels(),
+				this.loadChecks(true),
+				this.loadRepoLabels(true),
 				this.loadReviewComments(true),
 				this.refreshCheckoutStatus(),
 				this.refreshLocalPrStatus(),
@@ -1007,7 +1083,7 @@ export default class PrDetailView extends Vue {
 			reloads.push(this.loadFiles(true));
 		}
 		else {
-			reloads.push(this.loadViewedState());
+			reloads.push(this.loadViewedState(true));
 		}
 		if (reloadLocalFiles) {
 			reloads.push(this.loadLocalFiles());
@@ -1015,10 +1091,10 @@ export default class PrDetailView extends Vue {
 		return reloads;
 	}
 
-	async loadChecks() {
+	async loadChecks(force = false) {
 		this.checksLoading = true;
 		try {
-			this.checks      = await GitHubClient.fetchDetailedChecks(this.owner, this.repo, this.prNumber);
+			this.checks      = await GitHubClient.fetchDetailedChecks(this.owner, this.repo, this.prNumber, force);
 			const hasPending = this.checks.some(check => {
 				const passed = [ 'success', 'neutral', 'skipped' ].includes(check.conclusion ?? '');
 				const failed = [ 'failure', 'timed_out', 'cancelled', 'error' ].includes(check.conclusion ?? '');
@@ -1056,7 +1132,7 @@ export default class PrDetailView extends Vue {
 			return;
 		}
 		try {
-			this.localPrStatus = await fetchLocalPullRequestStatus(target);
+			this.localPrStatus = await fetchLocalPullRequestStatus(target, this.defaultBranch);
 		}
 		catch {
 			this.localPrStatus = null;
@@ -1087,9 +1163,9 @@ export default class PrDetailView extends Vue {
 		}
 	}
 
-	async loadRepoLabels() {
+	async loadRepoLabels(force = false) {
 		try {
-			this.repoLabels = await GitHubClient.fetchRepoLabels(this.owner, this.repo);
+			this.repoLabels = await GitHubClient.fetchRepoLabels(this.owner, this.repo, force);
 		}
 		catch {
 			this.repoLabels = [];
@@ -1110,11 +1186,15 @@ export default class PrDetailView extends Vue {
 		this.filesLoading      = true;
 		this._loadFilesPromise = (async () => {
 			try {
-				const rawFiles = await GitHubClient.fetchPRFiles(this.owner, this.repo, this.prNumber, force);
-				const fileList = await detectRenamedFiles(rawFiles, this.loadRenameCandidateContent);
-				const result   = await GitHubClient.fetchPRFilesViewedState(this.owner, this.repo, this.prNumber);
-				this.applyViewedStateFromApi(fileList, result);
-				this.files = fileList;
+				// Resolved with the list rather than after it: the base panes are read at this commit, so it
+				// has to be in hand before the Files tab starts fetching them.
+				const [ rawFiles, mergeBase ] = await Promise.all([
+					GitHubClient.fetchPRFiles(this.owner, this.repo, this.prNumber, this.prDiffVersion, force),
+					this.resolveMergeBaseSha(),
+				]);
+				this._rawPrFiles  = rawFiles;
+				this.mergeBaseSha = mergeBase;
+				await this.mergeAndApplyPrFiles(force);
 			}
 			catch (e: any) {
 				// A failed refresh should leave the reader on the list they already had rather than
@@ -1134,6 +1214,85 @@ export default class PrDetailView extends Vue {
 
 	async ensureFilesLoaded(): Promise<void> {
 		await this.loadFiles();
+	}
+
+	/**
+	 * Commit the PR Files tab reads its base panes from. GitHub diffs a pull request against the merge base,
+	 * not against the base branch's current tip, so reading `base.sha` shows the wrong "before" for any file
+	 * the base branch has touched since — and nothing at all for one it has already deleted.
+	 */
+	/** Which pull request a mutation acted on, so its result can be written into that record directly. */
+	get prLocation(): PullRequestLocation {
+		return { owner : this.owner, repo : this.repo, number : this.prNumber };
+	}
+
+	get prFilesBaseRef(): string {
+		return this.mergeBaseSha || this.pr?.base?.sha || '';
+	}
+
+	/**
+	 * What the pull request's diff is computed from, and so the version of everything derived from it. Both
+	 * commits are in it: GitHub diffs against the merge base, so a base branch that moved can change the diff
+	 * without the head commit moving at all. This is the base branch's tip rather than the merge base itself
+	 * because it is known immediately — the merge base costs a request, and over-invalidating is safe where
+	 * under-invalidating is the bug this replaces.
+	 */
+	get prDiffVersion(): string {
+		return diffVersion(this.pr?.base?.sha || '', this.pr?.head?.sha || '');
+	}
+
+	get forcedPairScope(): ForcedPairScope {
+		return { owner : this.owner, repo : this.repo, prNumber : this.routeBackedPrNumber };
+	}
+
+	/**
+	 * Merge renamed pairs into GitHub's own file list and hand the result to the Files tab. A forced pair
+	 * that cannot be built is dropped rather than kept as an invisible setting: it never becomes a merged
+	 * entry, so nothing in the list could undo it, and the reader is told why instead.
+	 */
+	private async mergeAndApplyPrFiles(force = false): Promise<void> {
+		const failed: ForcedFilePair[] = [];
+		const fileList                 = await detectRenamedFiles(
+			this._rawPrFiles,
+			this.loadRenameCandidateContent,
+			this.forcedFilePairs,
+			(pair, reason) => {
+				failed.push(pair);
+				this.filePairError = reason;
+			}
+		);
+		const result = await GitHubClient.fetchPRFilesViewedState(this.owner, this.repo, this.prNumber, this.prDiffVersion, force);
+		this.applyViewedStateFromApi(fileList, result);
+		this.files = fileList;
+		for (const pair of failed) {
+			this.forcedFilePairs = removeForcedFilePair(this.forcedPairScope, pair);
+		}
+	}
+
+	/**
+	 * Re-merge the file list around a pairing the reader just made or undid. The list is rebuilt from
+	 * GitHub's own entries rather than patched in place, so an entry that was already merged comes apart
+	 * again cleanly and the remaining pairs are re-detected against what is left — and since those entries
+	 * are still in hand, nothing is refetched from GitHub.
+	 */
+	private async applyForcedFilePairs(pairs: ForcedFilePair[]): Promise<void> {
+		this.forcedFilePairs = pairs;
+		if (this._rawPrFiles.length) {
+			await this.mergeAndApplyPrFiles();
+		}
+		else {
+			await this.loadFiles(true);
+		}
+	}
+
+	async forceFilePair(pair: ForcedFilePair): Promise<void> {
+		this.filePairError = '';
+		await this.applyForcedFilePairs(addForcedFilePair(this.forcedPairScope, pair));
+	}
+
+	async unforceFilePair(pair: ForcedFilePair): Promise<void> {
+		this.filePairError = '';
+		await this.applyForcedFilePairs(removeForcedFilePair(this.forcedPairScope, pair));
 	}
 
 	async loadLocalFiles(): Promise<void> {
@@ -1198,19 +1357,46 @@ export default class PrDetailView extends Vue {
 		}
 	}
 
-	/** One side of one candidate file, for the rename detector. A read that fails just abandons the pair. */
+	/**
+	 * One side of one candidate file, for the rename detector. Throwing abandons the pair, and says why for
+	 * a pair the reader forced.
+	 *
+	 * The base side is read at the merge base, falling back to `base.sha`. The two are usually the same
+	 * commit, but `base.sha` tracks the base branch's tip: once that branch moves on past the pull request —
+	 * deleting or renaming the same file itself, say — the file this pull request deletes is no longer
+	 * there, while the merge base, which is what the diff is actually against, still has it.
+	 */
 	private loadRenameCandidateContent = async (path: string, side: 'base' | 'head'): Promise<string | null> => {
-		const ref = side === 'base' ? this.pr?.base?.sha : this.pr?.head?.sha;
-		if (!ref) {
-			return null;
+		const refs = side === 'head'
+			? [ this.pr?.head?.sha ]
+			: [ await this.resolveMergeBaseSha(), this.pr?.base?.sha ];
+		const tried = [ ...new Set(refs.filter((ref): ref is string => Boolean(ref))) ];
+		if (!tried.length) {
+			throw new Error(`no ${side} commit is known for this pull request`);
 		}
-		try {
-			return await GitHubClient.fetchFileContent(this.owner, this.repo, path, ref);
+
+		let lastError = '';
+		for (const ref of tried) {
+			try {
+				return await GitHubClient.fetchFileContent(this.owner, this.repo, path, ref);
+			}
+			catch (error: any) {
+				lastError = `${error?.message || 'the read failed'} (at ${ref.slice(0, 7)})`;
+			}
 		}
-		catch {
-			return null;
-		}
+		throw new Error(lastError);
 	};
+
+	/** Resolved at most once per pull request; `base.sha` stands in when the comparison cannot be read. */
+	private resolveMergeBaseSha(): Promise<string> {
+		const base = this.pr?.base?.sha;
+		const head = this.pr?.head?.sha;
+		if (!base || !head) {
+			return Promise.resolve('');
+		}
+		this._mergeBaseShaPromise ??= GitHubClient.fetchMergeBaseSha(this.owner, this.repo, base, head).catch(() => '');
+		return this._mergeBaseShaPromise;
+	}
 
 	/** Apply GitHub viewed-file state for `fileList` so `files` and `viewedFiles` stay in sync for the child PR Files tab. */
 	private applyViewedStateFromApi(fileList: PRFile[], result: { prNodeId: string; viewedFiles: Record<string, string> }) {
@@ -1239,9 +1425,9 @@ export default class PrDetailView extends Vue {
 		}
 	}
 
-	async loadViewedState() {
+	async loadViewedState(force = false) {
 		try {
-			const result = await GitHubClient.fetchPRFilesViewedState(this.owner, this.repo, this.prNumber);
+			const result = await GitHubClient.fetchPRFilesViewedState(this.owner, this.repo, this.prNumber, this.prDiffVersion, force);
 			this.applyViewedStateFromApi(this.files, result);
 		}
 		catch {
@@ -1384,7 +1570,7 @@ export default class PrDetailView extends Vue {
 		this.localCommitError       = '';
 		this.localGitError          = '';
 		try {
-			this.localPrStatus        = await commitLocalPullRequestChanges(target, message);
+			this.localPrStatus        = await commitLocalPullRequestChanges(target, message, this.defaultBranch);
 			this.localCommitModalOpen = false;
 			this.localFiles           = [];
 			this.localViewedFiles     = {};
@@ -1413,7 +1599,7 @@ export default class PrDetailView extends Vue {
 		this.pushingLocalChanges = true;
 		this.localGitError       = '';
 		try {
-			this.localPrStatus = await pushLocalPullRequestChanges(target);
+			this.localPrStatus = await pushLocalPullRequestChanges(target, this.defaultBranch);
 			await Promise.all([
 				this.refreshCheckoutStatus(),
 				this.loadAll(),
@@ -1506,7 +1692,9 @@ export default class PrDetailView extends Vue {
 		this.stopChecksPolling();
 		this._checksTimer = setInterval(async () => {
 			try {
-				this.checks      = await GitHubClient.fetchDetailedChecks(this.owner, this.repo, this.prNumber);
+				// Forced: the poll runs faster than the record's TTL, and it exists precisely to find out
+				// whether CI has moved — the one thing no version in the store can answer.
+				this.checks      = await GitHubClient.fetchDetailedChecks(this.owner, this.repo, this.prNumber, true);
 				const hasPending = this.checks.some(c => {
 					const con    = c.conclusion;
 					const passed = con === 'success' || con === 'neutral' || con === 'skipped';
@@ -1571,7 +1759,9 @@ export default class PrDetailView extends Vue {
 	}
 
 	onCommentsUpdated() {
-		this.loadReviewComments();
+		// A comment mutation the store could not fold in itself — a submitted review adds several at once —
+		// so this read is forced past the record's TTL rather than trusting its age.
+		void this.loadReviewComments(true);
 	}
 
 	async submitReview() {
@@ -1583,7 +1773,7 @@ export default class PrDetailView extends Vue {
 			await GitHubClient.submitReview(this.owner, this.repo, this.prNumber, this.pr.head.sha, this.pendingComments);
 			this.pendingComments = [];
 			this.persistPendingToStorage();
-			await this.loadReviewComments();
+			await this.loadReviewComments(true);
 		}
 		catch (e: any) {
 			console.error('Failed to submit review:', e);
@@ -1614,25 +1804,24 @@ export default class PrDetailView extends Vue {
 		const fullRepo      = `${this.owner}/${this.repo}`;
 		try {
 			await GitHubClient.submitReview(this.owner, this.repo, this.prNumber, this.pr.head.sha, [], 'APPROVE');
-			const labelsOnPr = [ ...(this.pr.labels || []) ] as { name: string }[];
-			for (const l of labelsOnPr) {
-				if (typeof l.name === 'string' && /changes-requested/i.test(l.name)) {
-					try {
-						await GitHubClient.removeLabel(fullRepo, this.prNumber, l.name);
-						this.pr.labels = (this.pr.labels || []).filter((x: any) => x.name !== l.name);
-					}
-					catch (e: any) {
-						console.error('Failed to remove label after approve:', e);
-					}
+			const labelsToRemove = ((this.pr.labels || []) as { name: string }[])
+				.filter(l => typeof l.name === 'string' && TEAM_REQUESTED_LABEL.test(l.name));
+			for (const l of labelsToRemove) {
+				try {
+					await GitHubClient.removeLabel(fullRepo, this.prNumber, l.name);
+					this.pr.labels = (this.pr.labels || []).filter((x: any) => x.name !== l.name);
+				}
+				catch (e: any) {
+					console.error('Failed to remove label after approve:', e);
 				}
 			}
 			const hasReadyToMergeLabel = (this.pr.labels || []).some(
-				(x: any) => typeof x.name === 'string' && x.name.toLowerCase() === 'ready to merge'
+				(x: any) => typeof x.name === 'string' && x.name.toLowerCase() === READY_TO_MERGE_LABEL
 			);
 			if (!hasReadyToMergeLabel) {
 				try {
 					const readyName
-						= this.repoLabels.find(lab => lab.name.toLowerCase() === 'ready to merge')?.name ?? 'ready to merge';
+						= this.repoLabels.find(lab => lab.name.toLowerCase() === READY_TO_MERGE_LABEL)?.name ?? READY_TO_MERGE_LABEL;
 					await GitHubClient.addLabel(fullRepo, this.prNumber, readyName);
 				}
 				catch (e: any) {
@@ -1791,7 +1980,7 @@ export default class PrDetailView extends Vue {
 		}
 		this.togglingDraft = true;
 		try {
-			const updated = await GitHubClient.setPullRequestDraft(pullRequestId, !this.pr.draft);
+			const updated = await GitHubClient.setPullRequestDraft(pullRequestId, !this.pr.draft, this.prLocation);
 			this.pr.draft = updated.draft;
 		}
 		catch (e: any) {
@@ -1815,7 +2004,7 @@ export default class PrDetailView extends Vue {
 		this.markingWhitespaceViewed      = true;
 		try {
 			for (const f of targets) {
-				await GitHubClient.markFileAsViewed(this.prNodeId, f.filename);
+				await GitHubClient.markFileAsViewed(this.prNodeId, f.filename, this.prLocation);
 				this.viewedFiles = { ...this.viewedFiles, [f.filename] : 'VIEWED' };
 			}
 			await this.loadViewedState();
@@ -1941,6 +2130,27 @@ html[data-color-scheme="light"] .pr-detail-header {
 .pr-detail-header-icon-btn:hover {
 	color: var(--text-primary);
 	border-color: var(--text-tertiary);
+}
+
+.pr-detail-checkout-badge {
+	padding: 2px 8px;
+	border-radius: 20px;
+}
+
+.pr-detail-checkout-badge-current {
+	background: var(--accent-green-bg);
+	color: var(--accent-green);
+}
+
+/* Checked out, but the worktree is not sitting on the latest PR head. */
+.pr-detail-checkout-badge-stale {
+	background: var(--chip-orange-bg);
+	color: var(--accent-orange);
+}
+
+.pr-detail-checkout-badge-none {
+	background: var(--muted-bg);
+	color: var(--text-tertiary);
 }
 
 .pr-detail-pin-btn {

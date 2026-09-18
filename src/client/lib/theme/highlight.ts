@@ -60,6 +60,9 @@ hljs.registerLanguage('shell', shell);
 const EXT_MAP: Record<string, string> = {
 	'.ts'         : 'typescript',
 	'.tsx'        : 'typescript',
+	// The ESM and CommonJS variants are ordinary TypeScript; only the module system differs.
+	'.mts'        : 'typescript',
+	'.cts'        : 'typescript',
 	'.js'         : 'javascript',
 	'.jsx'        : 'javascript',
 	'.mjs'        : 'javascript',
@@ -145,9 +148,56 @@ export function highlightLines(code: string, filename: string): string[] | null 
 
 	try {
 		const result = hljs.highlight(code, { language : lang });
-		return result.value.split('\n');
+		return splitHighlightedLines(result.value);
 	}
 	catch {
 		return null;
+	}
+}
+
+/**
+ * Splits highlight.js output into one self-contained HTML string per line.
+ *
+ * highlight.js emits a single element around a construct that spans several lines (a JSDoc block,
+ * a template literal, a multi-line string), so a plain split on newlines leaves the first line with
+ * an unclosed tag, the middle lines with no tag at all and the last with a stray closing tag. Each
+ * line is rendered on its own here, so any element still open at a line break is closed at the end
+ * of that line and re-opened at the start of the next.
+ */
+function splitHighlightedLines(html: string): string[] {
+	const lines: string[]    = [];
+	const openTags: string[] = [];
+	let current              = '';
+
+	// The output only ever contains <span> elements; highlight.js escapes every other character.
+	const TAG_RE = /<\/?span[^>]*>/g;
+	let pos      = 0;
+
+	for (let match = TAG_RE.exec(html); match; match = TAG_RE.exec(html)) {
+		appendText(html.slice(pos, match.index));
+
+		if (match[0].startsWith('</')) {
+			openTags.pop();
+		}
+		else {
+			openTags.push(match[0]);
+		}
+		current += match[0];
+		pos      = match.index + match[0].length;
+	}
+	appendText(html.slice(pos));
+	lines.push(current + '</span>'.repeat(openTags.length));
+
+	return lines;
+
+	function appendText(text: string) {
+		const parts = text.split('\n');
+		for (let i = 0; i < parts.length; i++) {
+			if (i > 0) {
+				lines.push(current + '</span>'.repeat(openTags.length));
+				current = openTags.join('');
+			}
+			current += parts[i];
+		}
 	}
 }

@@ -1,5 +1,14 @@
+import type { BlobTarget }                  from '@/lib/store/blobCache';
+import { clearBlobs, peekBlob, storeBlob }  from '@/lib/store/blobCache';
+import type { ReviewDecision, ViewedState } from '@/lib/store/prStore';
+import {
+	clearStores, detailedChecks, issueComments, mergeBases, prBotCounts, prChecks, prDetails, prFiles, prKey, prMergeability, prStats, repoKey,
+	repoLabels, reviewComments, reviewDecision, viewedState
+} from '@/lib/store/prStore';
+
 // GraphQL field aliases let one request resolve many pull requests at once. 20 keeps a batch inside GitHub's
 // node-count budget while cutting the per-card request count by the same factor.
+const PER_PAGE                 = 100;
 const PR_CARD_BATCH_SIZE       = 20;
 const USER_NAME_BATCH_SIZE     = 50;
 const REVIEW_THREAD_LIMIT      = 50;
@@ -10,12 +19,15 @@ const PROTECTED_BRANCH_NAMES   = new Set([ 'dev', 'main', 'master' ]);
 const CURSOR_BOT               = /^cursor\b/i;
 
 /**
- * Fetch options for a user-triggered refresh. GitHub serves its REST responses with `max-age=60`, so both the
- * browser and GitHub's own CDN will happily hand back a minute-old pull request — long enough that a reader who
- * pushes a commit and hits Refresh sees the previous diff. `no-cache` forces revalidation instead of a plain
- * cache read; GitHub does not charge rate limit for the 304s that revalidation usually returns.
+ * Fetch options for every read the entity store backs.
+ *
+ * GitHub serves its REST responses with `max-age=60`, and the browser cache that honours it is keyed by URL
+ * and age — which is exactly what let a reader who pushed a commit and hit Refresh see the previous diff.
+ * Freshness is the store's job now, so the browser cache is taken out of the loop entirely (`no-store`) and
+ * shared caches are told to revalidate (`no-cache`) rather than answer from their own copy. What replaces
+ * them is the `If-None-Match` this sends alongside: GitHub does not charge rate limit for a 304.
  */
-const REVALIDATE_OPTIONS = { cache : 'no-cache' as RequestCache, headers : { 'Cache-Control' : 'no-cache' } };
+const STORE_FETCH_OPTIONS = { cache : 'no-store' as RequestCache, headers : { 'Cache-Control' : 'no-cache' } };
 
 const CHECK_ROLLUP_SELECTION = `
 	commits(last: 1) {
@@ -71,10 +83,6 @@ class GitHubAPI {
 	private apiBase              = '/api/github';
 	private graphqlUrl           = '/api/github/graphql';
 	private userNameCache        = new Map<string, string>();
-	private botCommentCache      = new Map<number, BotCounts>();
-	private prStatsCache         = new Map<number, PRStats>();
-	private checksCache          = new Map<number, ChecksSummary>();
-	private prMergeabilityCache  = new Map<number, PRMergeability>();
 	private worktreePrCache      = new Map<string, any | null>();
 	private oauthScopes          = new Set<string>();
 
@@ -101,25 +109,47 @@ class GitHubAPI {
 		return this.oauthScopes.has(scope);
 	}
 
+	/**
+	 * Sign-out. This is the one moment that really does invalidate everything — a different account may not
+	 * even be able to see what the last one read. Refreshes no longer come through here: they revalidate the
+	 * records in place, which is what keeps the screen from emptying while they run.
+	 */
 	clear() {
 		this.token = null;
 		this.user  = null;
 		this.oauthScopes.clear();
 		this.userNameCache.clear();
-		this.clearAsyncCaches();
-	}
-
-	clearAsyncCaches() {
-		this.botCommentCache.clear();
-		this.prStatsCache.clear();
-		this.checksCache.clear();
-		this.prMergeabilityCache.clear();
 		this.worktreePrCache.clear();
+		clearStores();
+		clearBlobs();
 	}
 
 	// ─── Core Fetch ───────────────────────────────────────
 
 	private async apiFetch(endpoint: string, options: any = {}): Promise<any> {
+		return (await this.apiRequest(endpoint, options)).json();
+	}
+
+	/**
+	 * A conditional read for the entity store: replay the ETag of the record already held so GitHub can answer
+	 * 304 — free of rate limit — when the bytes have not moved. Returns the response body only when they have.
+	 */
+	private async apiFetchConditional(endpoint: string, etag: string | null, extraHeaders: Record<string, string> = {}): Promise<ConditionalResult> {
+		const response = await this.apiRequest(endpoint, {
+			...STORE_FETCH_OPTIONS,
+			headers : {
+				...STORE_FETCH_OPTIONS.headers,
+				...extraHeaders,
+				...(etag ? { 'If-None-Match' : etag } : {}),
+			},
+		});
+		if (response.status === 304) {
+			return { notModified : true, etag };
+		}
+		return { data : await response.json(), etag : response.headers.get('etag') };
+	}
+
+	private async apiRequest(endpoint: string, options: any = {}): Promise<Response> {
 		const { headers: extraHeaders, ...restOptions } = options;
 		const response = await fetch(`${this.apiBase}${endpoint}`, {
 			...restOptions,
@@ -129,6 +159,11 @@ class GitHubAPI {
 				...extraHeaders,
 			},
 		});
+
+		// Not an error and not a body: the caller asked conditionally and already holds what it wanted.
+		if (response.status === 304) {
+			return response;
+		}
 
 		if (!response.ok) {
 			if (response.status === 401) {
@@ -163,7 +198,7 @@ class GitHubAPI {
 			this.oauthScopes = new Set(scopes.split(',').map(scope => scope.trim()).filter(Boolean));
 		}
 
-		return response.json();
+		return response;
 	}
 
 	private async apiFetchArrayBuffer(endpoint: string): Promise<ArrayBuffer> {
@@ -253,18 +288,46 @@ class GitHubAPI {
 	private async fetchAllPages(endpoint: string, options: any = {}): Promise<any[]> {
 		let allItems: any[] = [];
 		let page            = 1;
-		const perPage       = 100;
 
 		while (true) {
-			const sep   = endpoint.includes('?') ? '&' : '?';
-			const items = await this.apiFetch(`${endpoint}${sep}per_page=${perPage}&page=${page}`, options);
+			const items = await this.apiFetch(pagedEndpoint(endpoint, page), options);
 			allItems    = allItems.concat(items);
-			if (items.length < perPage) {
+			if (items.length < PER_PAGE) {
 				break;
 			}
 			page++;
 		}
 		return allItems;
+	}
+
+	/**
+	 * A conditional list read. GitHub gives each page its own ETag, and a pull request's files or comments
+	 * almost always fit in one page, so the common case is settled by a single 304 that costs no rate limit.
+	 *
+	 * A list that spans pages is refetched in full once the first page has moved: reassembling a list whose
+	 * pages partly answered 304 would mean keeping each page's slice alongside the record, and the offsets
+	 * still shift the moment any page changes length. Not worth the bookkeeping for the rare large PR.
+	 */
+	private async fetchAllPagesConditional(endpoint: string, etag: string | null): Promise<ConditionalResult> {
+		const first = await this.apiFetchConditional(pagedEndpoint(endpoint, 1), etag);
+		if (first.notModified) {
+			return first;
+		}
+
+		let allItems: any[] = first.data || [];
+		let page            = 1;
+		while (allItems.length >= PER_PAGE * page) {
+			page++;
+			const items = await this.apiFetch(pagedEndpoint(endpoint, page), STORE_FETCH_OPTIONS);
+			allItems    = allItems.concat(items);
+			if (items.length < PER_PAGE) {
+				break;
+			}
+		}
+
+		// Only a list with room to spare on its one page can be revalidated by that page's ETag alone. A full
+		// page means the next entry lands on page two, which the first page's tag would never notice.
+		return { data : allItems, etag : allItems.length < PER_PAGE ? first.etag : null };
 	}
 
 	// ─── Public API ───────────────────────────────────────
@@ -403,25 +466,34 @@ class GitHubAPI {
 	 * GraphQL calls this replaces. Also backfills `head`/`base` on each PR, which search results omit.
 	 */
 	async fetchPrCardData(prs: any[]) {
-		const toFetch = prs.filter(pr => (
-			!this.prStatsCache.has(pr.id)
-			|| !this.checksCache.has(pr.id)
-			|| !this.botCommentCache.has(pr.id)
-			|| !pr.head
-			|| !pr.base
-		));
+		// A card is refetched when its record is missing *or* describes an older version of the pull request.
+		// The version check is what the old caches could not do: they held whatever they were first told until
+		// something cleared them all, so a PR that moved kept showing the stats it had when the board loaded.
+		const toFetch = prs.filter(pr => {
+			const key     = cardKey(pr.id);
+			const version = cardVersion(pr);
+			return (
+				!prStats.peekAt(key, version)
+				|| !prChecks.peekAt(key, version)
+				|| !prBotCounts.peekAt(key, version)
+				|| !pr.head
+				|| !pr.base
+			);
+		});
 
 		for (const batch of chunk(toFetch, PR_CARD_BATCH_SIZE)) {
 			const nodes = await this.fetchPullRequestNodes(batch, PR_CARD_FRAGMENT);
 			for (const { pr, node } of nodes) {
-				this.prStatsCache.set(pr.id, {
+				const key  = cardKey(pr.id);
+				const meta = { version : cardVersion(pr) };
+				prStats.set(key, {
 					changedFiles : node.changedFiles ?? 0,
 					additions    : node.additions ?? 0,
 					deletions    : node.deletions ?? 0,
-				});
-				this.prMergeabilityCache.set(pr.id, mergeabilityFromGraphql(node.mergeable));
-				this.checksCache.set(pr.id, checksSummaryFromPullRequest(node));
-				this.botCommentCache.set(pr.id, botCountsFromReviewThreads(node.reviewThreads?.nodes));
+				}, meta);
+				prMergeability.set(key, mergeabilityFromGraphql(node.mergeable), meta);
+				prChecks.set(key, checksSummaryFromPullRequest(node), meta);
+				prBotCounts.set(key, botCountsFromReviewThreads(node.reviewThreads?.nodes), meta);
 
 				const head = refDescriptor(node.headRepository, node.headRefName, node.headRefOid);
 				const base = refDescriptor(node.baseRepository, node.baseRefName, node.baseRefOid);
@@ -446,11 +518,14 @@ class GitHubAPI {
 		for (const batch of chunk(prs, PR_CARD_BATCH_SIZE)) {
 			const nodes = await this.fetchPullRequestNodes(batch, PR_CHECKS_FRAGMENT);
 			for (const { pr, node } of nodes) {
+				const key    = cardKey(pr.id);
 				const checks = checksSummaryFromPullRequest(node);
-				if (checksSummariesDiffer(this.checksCache.get(pr.id), checks)) {
+				if (checksSummariesDiffer(prChecks.peek(key)?.data, checks)) {
 					changed = true;
 				}
-				this.checksCache.set(pr.id, checks);
+				// Checks move with CI rather than with the pull request, so the poll writes them in directly:
+				// there is no version to read them back at, which is why this store is written, never `read`.
+				prChecks.set(key, checks, { version : cardVersion(pr) });
 			}
 		}
 
@@ -473,14 +548,18 @@ class GitHubAPI {
 		for (const batch of chunk(prs, PR_CARD_BATCH_SIZE)) {
 			const nodes = await this.fetchPullRequestNodes(batch, PINNED_PR_FRAGMENT);
 			for (const { pr, node } of nodes) {
+				const key    = cardKey(pr.id);
+				const held   = prChecks.peek(key);
 				const checks = checksSummaryFromPullRequest(node);
 				states.push({
 					id            : pr.id,
 					title         : node.title || '',
 					merged        : Boolean(node.merged),
-					checksChanged : checksSummariesDiffer(this.checksCache.get(pr.id), checks),
+					checksChanged : checksSummariesDiffer(held?.data, checks),
 				});
-				this.checksCache.set(pr.id, checks);
+				// The pinned poll reads no pull request fields it could version this by, so it keeps whatever
+				// version the record already carried rather than resetting it and forcing a board refetch.
+				prChecks.set(key, checks, { version : held?.version ?? '' });
 			}
 		}
 
@@ -523,20 +602,23 @@ class GitHubAPI {
 		return resolved;
 	}
 
+	// Reactive reads: these go through the store, so a card rerenders when its record is written rather than
+	// when something remembers to bump a counter past it.
+
 	getBotComments(prId: number): BotCounts | null {
-		return this.botCommentCache.get(prId) || null;
+		return prBotCounts.peek(cardKey(prId))?.data ?? null;
 	}
 
 	getPRStats(prId: number): PRStats | null {
-		return this.prStatsCache.get(prId) || null;
+		return prStats.peek(cardKey(prId))?.data ?? null;
 	}
 
 	getPRMergeability(prId: number): PRMergeability | null {
-		return this.prMergeabilityCache.get(prId) || null;
+		return prMergeability.peek(cardKey(prId))?.data ?? null;
 	}
 
 	getChecks(prId: number): ChecksSummary | null {
-		return this.checksCache.get(prId) || null;
+		return prChecks.peek(cardKey(prId))?.data ?? null;
 	}
 
 	/** Resolve display names for PR authors. One aliased GraphQL request replaces one REST call per login. */
@@ -631,22 +713,41 @@ class GitHubAPI {
 			));
 	}
 
+	/**
+	 * The pull request itself. Its version is its own `updated_at`, which can only be learned by reading it,
+	 * so this is one of the few records whose freshness is a TTL — backed by an ETag, so the read that finds
+	 * nothing has changed costs a 304 and no rate limit. `forceRefresh` revalidates regardless of age; it is
+	 * how merge completion is polled for, and the record keeps its data until the new one arrives.
+	 */
 	async fetchPRDetail(owner: string, repo: string, number: number, forceRefresh = false): Promise<any> {
-		const endpoint = `/repos/${owner}/${repo}/pulls/${number}${forceRefresh ? `?prism_refresh=${Date.now()}` : ''}`;
-		const pr       = await this.apiFetch(endpoint, forceRefresh ? {
-			// Merge completion is detected by repeatedly reading this endpoint. Use both a cache-busting URL and
-			// no-cache directives because intermediary caches can otherwise return a stale open PR.
-			cache   : 'no-store',
-			headers : {
-				'Accept'        : 'application/vnd.github.v3.full+json',
-				'Cache-Control' : 'no-cache',
+		return prDetails.read({
+			key   : prKey(owner, repo, number),
+			force : forceRefresh,
+			fetch : async previous => {
+				const result = await this.apiFetchConditional(
+					`/repos/${owner}/${repo}/pulls/${number}`,
+					previous?.etag ?? null,
+					{ Accept : 'application/vnd.github.v3.full+json' }
+				);
+				if (result.notModified) {
+					return result;
+				}
+				const pr = normalizePullRequest(result.data);
+				return { data : pr, etag : result.etag, version : String(pr.updated_at ?? '') };
 			},
-		} : { headers : { Accept : 'application/vnd.github.v3.full+json' } });
-		return normalizePullRequest(pr);
+		});
 	}
 
 	/** GitHub aggregate review state: APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED or null. */
-	async fetchPullRequestReviewDecision(owner: string, repo: string, number: number): Promise<'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null> {
+	async fetchPullRequestReviewDecision(owner: string, repo: string, number: number, forceRefresh = false): Promise<ReviewDecision> {
+		return reviewDecision.read({
+			key   : prKey(owner, repo, number),
+			force : forceRefresh,
+			fetch : async () => ({ data : await this.readReviewDecision(owner, repo, number) }),
+		});
+	}
+
+	private async readReviewDecision(owner: string, repo: string, number: number): Promise<ReviewDecision> {
 		const QUERY = `
 	  query($owner: String!, $repo: String!, $number: Int!) {
 		repository(owner: $owner, name: $repo) {
@@ -724,11 +825,42 @@ class GitHubAPI {
 			const msg = typeof body.message === 'string' ? body.message : `GitHub API error: ${response.status}`;
 			throw apiError(msg, { status : response.status });
 		}
+		// PATCH returns the whole updated pull request, so the record is updated from it rather than refetched.
+		this.mergePrDetail(owner, repo, number, normalizePullRequest(body));
 		return body;
 	}
 
+	/**
+	 * Record a full pull request payload the app already holds — the response to a merge, for instance — so
+	 * every view reading that record sees it without anyone going back to GitHub for what is already known.
+	 */
+	recordPullRequest(owner: string, repo: string, number: number, pr: any): void {
+		const normalized = normalizePullRequest(pr);
+		const key        = prKey(owner, repo, number);
+		if (prDetails.peek(key)) {
+			this.mergePrDetail(owner, repo, number, normalized);
+			return;
+		}
+		prDetails.set(key, normalized, { version : String(normalized.updated_at ?? '') });
+	}
+
+	/**
+	 * Fold a mutation's own result into the pull request record. Merged rather than replaced: the detail read
+	 * asks for `v3.full+json` and the mutation endpoints do not, so a wholesale overwrite would drop the
+	 * rendered fields that only the richer response carries.
+	 */
+	private mergePrDetail(owner: string, repo: string, number: number, fields: Record<string, any>): void {
+		const key    = prKey(owner, repo, number);
+		const record = prDetails.peek(key);
+		if (!record) {
+			return;
+		}
+		const merged = { ...record.data, ...fields };
+		prDetails.set(key, merged, { version : String(merged.updated_at ?? record.version) });
+	}
+
 	/** Toggle draft state via GraphQL (REST PATCH does not support draft transitions). */
-	async setPullRequestDraft(pullRequestId: string, draft: boolean): Promise<{ draft: boolean }> {
+	async setPullRequestDraft(pullRequestId: string, draft: boolean, target?: PullRequestLocation): Promise<{ draft: boolean }> {
 		const MUTATION = draft
 			? `
 	  mutation($pullRequestId: ID!) {
@@ -744,25 +876,82 @@ class GitHubAPI {
 	  }`;
 		const data    = await this.graphql(MUTATION, { pullRequestId });
 		const key     = draft ? 'convertPullRequestToDraft' : 'markPullRequestReadyForReview';
-		const isDraft = data[key]?.pullRequest?.isDraft;
-		return { draft : Boolean(isDraft) };
+		const isDraft = Boolean(data[key]?.pullRequest?.isDraft);
+		if (target) {
+			this.mergePrDetail(target.owner, target.repo, target.number, { draft : isDraft });
+		}
+		return { draft : isDraft };
 	}
 
-	async fetchPRFiles(owner: string, repo: string, number: number, forceRefresh = false): Promise<PRFile[]> {
-		return this.fetchAllPages(`/repos/${owner}/${repo}/pulls/${number}/files`, forceRefresh ? REVALIDATE_OPTIONS : {});
+	/**
+	 * The changed-file list, versioned by the two commits the diff is computed from. Re-reading a pull request
+	 * whose head has not moved returns the list already held without a request; a push changes the version and
+	 * the list is refetched, which is the only thing that should have to be.
+	 */
+	async fetchPRFiles(owner: string, repo: string, number: number, version: string, forceRefresh = false): Promise<PRFile[]> {
+		return prFiles.read({
+			key   : prKey(owner, repo, number),
+			version,
+			force : forceRefresh,
+			fetch : previous => this.fetchAllPagesConditional(`/repos/${owner}/${repo}/pulls/${number}/files`, previous?.etag ?? null),
+		});
 	}
 
 	async fetchFileContent(owner: string, repo: string, path: string, ref: string): Promise<string> {
-		const data = await this.apiFetch(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`);
-		return utf8FromBase64(data.content.replace(/\n/g, ''));
+		return this.readBlob({ owner, repo, path, ref, encoding : 'text' }, async () => {
+			const data = await this.apiFetch(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`);
+			return utf8FromBase64(data.content.replace(/\n/g, ''));
+		});
+	}
+
+	/**
+	 * File contents are read through the blob cache, which is addressed by the commit they belong to and so
+	 * can never be stale. A push invalidates the file list; every file that commit did not touch still has
+	 * the same content at the same path, and is served from memory rather than fetched again.
+	 */
+	private async readBlob(target: BlobTarget, fetcher: () => Promise<string>): Promise<string> {
+		const held = peekBlob(target);
+		if (held !== undefined) {
+			return held;
+		}
+		const content = await fetcher();
+		storeBlob(target, content);
+		return content;
+	}
+
+	/**
+	 * The commit a pull request's diff is really computed against. `base.sha` is the base branch's own tip,
+	 * which drifts as that branch moves, so a file the pull request deletes can be missing there already —
+	 * the merge base always has it.
+	 */
+	async fetchMergeBaseSha(owner: string, repo: string, base: string, head: string): Promise<string> {
+		// The merge base of two commits never changes, so this is keyed by the pair and needs no version.
+		return mergeBases.read({
+			key   : `${repoKey(owner, repo)}:${base}...${head}`,
+			fetch : async () => {
+				const data = await this.apiFetch(`/repos/${owner}/${repo}/compare/${base}...${head}`, STORE_FETCH_OPTIONS);
+				const sha  = data?.merge_base_commit?.sha;
+				return { data : typeof sha === 'string' ? sha : '' };
+			},
+		});
 	}
 
 	async fetchFileContentBase64(owner: string, repo: string, path: string, ref: string): Promise<string> {
-		const data = await this.apiFetch(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`);
-		return data.content.replace(/\n/g, '');
+		return this.readBlob({ owner, repo, path, ref, encoding : 'base64' }, async () => {
+			const data = await this.apiFetch(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`);
+			return data.content.replace(/\n/g, '');
+		});
 	}
 
-	async fetchDetailedChecks(owner: string, repo: string, number: number): Promise<CheckRunDetail[]> {
+	async fetchDetailedChecks(owner: string, repo: string, number: number, forceRefresh = false): Promise<CheckRunDetail[]> {
+		return detailedChecks.read({
+			key   : prKey(owner, repo, number),
+			force : forceRefresh,
+			fetch : async () => ({ data : await this.readDetailedChecks(owner, repo, number) }),
+		});
+	}
+
+	private async readDetailedChecks(owner: string, repo: string, number: number): Promise<CheckRunDetail[]> {
 		const QUERY = `
 	  query($owner: String!, $repo: String!, $number: Int!) {
 		repository(owner: $owner, name: $repo) {
@@ -865,12 +1054,35 @@ class GitHubAPI {
 			.filter((failure): failure is TestFailure => failure !== null);
 	}
 
-	async fetchRepoLabels(owner: string, repo: string): Promise<RepoLabel[]> {
-		const labels = await this.fetchAllPages(`/repos/${owner}/${repo}/labels`);
-		return labels.map((l: any) => ({ id : l.id, name : l.name, color : l.color, description : l.description }));
+	async fetchRepoLabels(owner: string, repo: string, forceRefresh = false): Promise<RepoLabel[]> {
+		return repoLabels.read({
+			key   : repoKey(owner, repo),
+			force : forceRefresh,
+			fetch : async previous => {
+				const result = await this.fetchAllPagesConditional(`/repos/${owner}/${repo}/labels`, previous?.etag ?? null);
+				if (result.notModified) {
+					return result;
+				}
+				const labels = (result.data as any[]).map(l => ({ id : l.id, name : l.name, color : l.color, description : l.description }));
+				return { data : labels, etag : result.etag };
+			},
+		});
 	}
 
-	async fetchPRFilesViewedState(owner: string, repo: string, number: number): Promise<{ viewedFiles: Record<string, string>; prNodeId: string }> {
+	/**
+	 * Viewed marks, versioned by the head commit they were recorded against — GitHub resets a file to unviewed
+	 * when a new commit touches it, so the marks and the commit belong together.
+	 */
+	async fetchPRFilesViewedState(owner: string, repo: string, number: number, version?: string, forceRefresh = false): Promise<ViewedState> {
+		return viewedState.read({
+			key   : prKey(owner, repo, number),
+			version,
+			force : forceRefresh,
+			fetch : async () => ({ data : await this.readViewedState(owner, repo, number) }),
+		});
+	}
+
+	private async readViewedState(owner: string, repo: string, number: number): Promise<ViewedState> {
 		const QUERY = `
 	  query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
 		repository(owner: $owner, name: $repo) {
@@ -919,7 +1131,7 @@ class GitHubAPI {
 		return { viewedFiles, prNodeId };
 	}
 
-	async markFileAsViewed(pullRequestId: string, path: string): Promise<void> {
+	async markFileAsViewed(pullRequestId: string, path: string, target?: PullRequestLocation): Promise<void> {
 		const MUTATION = `
 	  mutation($pullRequestId: ID!, $path: String!) {
 		markFileAsViewed(input: { pullRequestId: $pullRequestId, path: $path }) {
@@ -927,9 +1139,10 @@ class GitHubAPI {
 		}
 	  }`;
 		await this.graphql(MUTATION, { pullRequestId, path });
+		this.recordViewedState(target, path, 'VIEWED');
 	}
 
-	async unmarkFileAsViewed(pullRequestId: string, path: string): Promise<void> {
+	async unmarkFileAsViewed(pullRequestId: string, path: string, target?: PullRequestLocation): Promise<void> {
 		const MUTATION = `
 	  mutation($pullRequestId: ID!, $path: String!) {
 		unmarkFileAsViewed(input: { pullRequestId: $pullRequestId, path: $path }) {
@@ -937,6 +1150,17 @@ class GitHubAPI {
 		}
 	  }`;
 		await this.graphql(MUTATION, { pullRequestId, path });
+		this.recordViewedState(target, path, 'UNVIEWED');
+	}
+
+	private recordViewedState(target: PullRequestLocation | undefined, path: string, state: string): void {
+		if (!target) {
+			return;
+		}
+		viewedState.patch(prKey(target.owner, target.repo, target.number), held => ({
+			...held,
+			viewedFiles : { ...held.viewedFiles, [path] : state },
+		}));
 	}
 
 	async createPR(repo: string, head: string, base: string, title: string, labels: string[] = []) {
@@ -995,32 +1219,43 @@ class GitHubAPI {
 		return map;
 	}
 
+	/**
+	 * Review comments have no version to key on — anyone can add one at any moment — so these records age out
+	 * on a TTL and lean on the ETag to make the usual "nothing new" read free. The mutations below write their
+	 * own results straight into the record, so posting a comment never costs a refetch.
+	 */
 	async fetchPRReviewComments(owner: string, repo: string, number: number, forceRefresh = false): Promise<ReviewComment[]> {
-		const raw        = await this.fetchAllPages(`/repos/${owner}/${repo}/pulls/${number}/comments`, forceRefresh ? REVALIDATE_OPTIONS : {});
-		const threadMeta = await this.fetchReviewCommentThreadMeta(owner, repo, number);
-		return raw.map((c: any) => {
-			const meta = threadMeta.get(c.id);
-			return {
-				id             : c.id,
-				node_id        : c.node_id,
-				path           : c.path,
-				line           : c.line ?? c.original_line ?? null,
-				side           : c.side || 'RIGHT',
-				original_line  : c.original_line ?? null,
-				body           : c.body,
-				user           : { login : c.user.login, avatar_url : c.user.avatar_url },
-				created_at     : c.created_at,
-				updated_at     : c.updated_at,
-				in_reply_to_id : c.in_reply_to_id ?? undefined,
-				html_url       : c.html_url,
-				isResolved     : meta?.isResolved ?? true,
-				threadNodeId   : meta?.threadNodeId,
-			};
+		return reviewComments.read({
+			key   : prKey(owner, repo, number),
+			force : forceRefresh,
+			fetch : async previous => {
+				const result = await this.fetchAllPagesConditional(`/repos/${owner}/${repo}/pulls/${number}/comments`, previous?.etag ?? null);
+				if (result.notModified) {
+					return result;
+				}
+				return { data : await this.decorateReviewComments(owner, repo, number, result.data as any[]), etag : result.etag };
+			},
 		});
 	}
 
+	private async decorateReviewComments(owner: string, repo: string, number: number, raw: any[]): Promise<ReviewComment[]> {
+		const threadMeta = await this.fetchReviewCommentThreadMeta(owner, repo, number);
+		// A comment the thread query did not cover is treated as resolved, so an unreadable thread map leaves
+		// the review dots quiet rather than lighting every one of them up.
+		return raw.map((c: any) => toReviewComment(c, threadMeta.get(c.id) ?? { isResolved : true, threadNodeId : '' }));
+	}
+
 	/** Toggle PR review thread resolved state (GraphQL only; requires `threadNodeId` from fetch). */
-	async setReviewThreadResolved(threadNodeId: string, resolved: boolean): Promise<void> {
+	async setReviewThreadResolved(threadNodeId: string, resolved: boolean, target?: PullRequestLocation): Promise<void> {
+		await this.mutateReviewThreadResolved(threadNodeId, resolved);
+		if (target) {
+			reviewComments.patch(prKey(target.owner, target.repo, target.number), comments => comments.map(
+				comment => comment.threadNodeId === threadNodeId ? { ...comment, isResolved : resolved } : comment
+			));
+		}
+	}
+
+	private async mutateReviewThreadResolved(threadNodeId: string, resolved: boolean): Promise<void> {
 		if (resolved) {
 			const MUTATION = `
 		mutation($threadId: ID!) {
@@ -1042,28 +1277,25 @@ class GitHubAPI {
 	}
 
 	async fetchPRIssueComments(owner: string, repo: string, number: number, forceRefresh = false): Promise<IssueComment[]> {
-		const raw = await this.fetchAllPages(`/repos/${owner}/${repo}/issues/${number}/comments`, forceRefresh ? REVALIDATE_OPTIONS : {});
-		return raw.map((c: any) => ({
-			id         : c.id,
-			body       : c.body || '',
-			user       : { login : c.user.login, avatar_url : c.user.avatar_url },
-			created_at : c.created_at,
-			html_url   : c.html_url,
-		}));
+		return issueComments.read({
+			key   : prKey(owner, repo, number),
+			force : forceRefresh,
+			fetch : async previous => {
+				const result = await this.fetchAllPagesConditional(`/repos/${owner}/${repo}/issues/${number}/comments`, previous?.etag ?? null);
+				return result.notModified ? result : { data : (result.data as any[]).map(toIssueComment), etag : result.etag };
+			},
+		});
 	}
 
 	async createIssueComment(owner: string, repo: string, number: number, body: string): Promise<IssueComment> {
-		const c = await this.apiFetch(`/repos/${owner}/${repo}/issues/${number}/comments`, {
+		const created = toIssueComment(await this.apiFetch(`/repos/${owner}/${repo}/issues/${number}/comments`, {
 			method : 'POST',
 			body   : JSON.stringify({ body }),
-		});
-		return {
-			id         : c.id,
-			body       : c.body || '',
-			user       : { login : c.user.login, avatar_url : c.user.avatar_url },
-			created_at : c.created_at,
-			html_url   : c.html_url,
-		};
+		}));
+		// GitHub handed back the comment it stored, so the record is updated from that rather than refetched.
+		// The ETag the record holds is now stale, which is the point: the next read revalidates and gets 200.
+		issueComments.patch(prKey(owner, repo, number), comments => [ ...comments, created ]);
+		return created;
 	}
 
 	async submitReview(owner: string, repo: string, number: number, commitId: string, pending: PendingComment[], event = 'COMMENT'): Promise<any> {
@@ -1084,21 +1316,9 @@ class GitHubAPI {
 			method : 'POST',
 			body   : JSON.stringify({ body }),
 		});
-		return {
-			id             : c.id,
-			node_id        : c.node_id,
-			path           : c.path,
-			line           : c.line ?? c.original_line ?? null,
-			side           : c.side || 'RIGHT',
-			original_line  : c.original_line ?? null,
-			body           : c.body,
-			user           : { login : c.user.login, avatar_url : c.user.avatar_url },
-			created_at     : c.created_at,
-			updated_at     : c.updated_at,
-			in_reply_to_id : c.in_reply_to_id ?? undefined,
-			html_url       : c.html_url,
-			isResolved     : false,
-		};
+		const reply = toReviewComment(c);
+		reviewComments.patch(prKey(owner, repo, number), comments => [ ...comments, reply ]);
+		return reply;
 	}
 
 	async applySuggestion(commentNodeId: string, commitMessage?: string): Promise<void> {
@@ -1111,6 +1331,54 @@ class GitHubAPI {
 		await this.graphql(MUTATION, { suggestionId : commentNodeId, message : commitMessage || 'Apply suggestion from review' });
 	}
 
+}
+
+/** Shared shape of one REST review comment, used by both the list read and the reply mutation. */
+function toReviewComment(c: any, meta?: { isResolved: boolean; threadNodeId: string }): ReviewComment {
+	return {
+		id             : c.id,
+		node_id        : c.node_id,
+		path           : c.path,
+		line           : c.line ?? c.original_line ?? null,
+		side           : c.side || 'RIGHT',
+		original_line  : c.original_line ?? null,
+		body           : c.body,
+		user           : { login : c.user.login, avatar_url : c.user.avatar_url },
+		created_at     : c.created_at,
+		updated_at     : c.updated_at,
+		in_reply_to_id : c.in_reply_to_id ?? undefined,
+		html_url       : c.html_url,
+		isResolved     : meta?.isResolved ?? false,
+		threadNodeId   : meta?.threadNodeId,
+	};
+}
+
+function toIssueComment(c: any): IssueComment {
+	return {
+		id         : c.id,
+		body       : c.body || '',
+		user       : { login : c.user.login, avatar_url : c.user.avatar_url },
+		created_at : c.created_at,
+		html_url   : c.html_url,
+	};
+}
+
+/** Card data is keyed by GitHub's global pull request id, which is unique across every repository. */
+function cardKey(prId: number): string {
+	return String(prId);
+}
+
+/**
+ * What a card's data describes. `updated_at` moves on a push, a label change, a new review — everything a
+ * card renders except the check rollup, which has nothing to key on and is written in by polling instead.
+ */
+function cardVersion(pr: any): string {
+	return String(pr?.updated_at ?? '');
+}
+
+function pagedEndpoint(endpoint: string, page: number): string {
+	const sep = endpoint.includes('?') ? '&' : '?';
+	return `${endpoint}${sep}per_page=${PER_PAGE}&page=${page}`;
 }
 
 export const GitHubClient = new GitHubAPI();
@@ -1401,6 +1669,23 @@ export interface ApiError extends Error {
 	rateLimitReset?: Date | null;
 }
 
+/** A conditional read's outcome: fresh bytes with their new ETag, or 304 and nothing to replace. */
+interface ConditionalResult {
+	data?: any;
+	etag?: string | null;
+	notModified?: boolean;
+}
+
+/**
+ * Which pull request a mutation acted on, so its result can be written into that record. Optional at every
+ * call site: a caller that cannot say leaves the record to revalidate on its own schedule instead.
+ */
+export interface PullRequestLocation {
+	owner: string;
+	repo: string;
+	number: number;
+}
+
 export interface BotCounts {
 	low: number;
 	medium: number;
@@ -1518,6 +1803,8 @@ export interface PRFile {
 	 * path — a review comment, viewed state — has to use `previous_filename` for the base side.
 	 */
 	synthesizedRename?: boolean;
+	/** Set when that pairing came from the reader choosing the two halves rather than from detection. */
+	forcedRename?: boolean;
 }
 
 export type CommentType = 'suggestion' | 'change-required' | 'question';

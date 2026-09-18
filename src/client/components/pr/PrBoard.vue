@@ -10,7 +10,6 @@
 						:hidden-labels="emptySet"
 						section="other"
 						:show-repo="showRepo"
-						:async-version="asyncVersion"
 						:checkout-status="checkoutStatus"
 						@drop="handleDrop"
 						@open-pr="$emit('open-pr', $event)"
@@ -23,7 +22,6 @@
 						:hidden-labels="alphaHidden"
 						section="alpha"
 						:show-repo="showRepo"
-						:async-version="asyncVersion"
 						:checkout-status="checkoutStatus"
 						@drop="handleDrop"
 						@open-pr="$emit('open-pr', $event)"
@@ -36,7 +34,6 @@
 						:hidden-labels="betaHidden"
 						section="beta"
 						:show-repo="showRepo"
-						:async-version="asyncVersion"
 						:checkout-status="checkoutStatus"
 						@drop="handleDrop"
 						@open-pr="$emit('open-pr', $event)"
@@ -50,7 +47,6 @@
 					:hidden-labels="gammaHiddenLabels"
 					section="gamma"
 					:show-repo="showRepo"
-					:async-version="asyncVersion"
 					:checkout-status="checkoutStatus"
 					@drop="handleDrop"
 					@open-pr="$emit('open-pr', $event)"
@@ -64,7 +60,6 @@
 						:hidden-labels="mergeHidden"
 						section="merge"
 						:show-repo="showRepo"
-						:async-version="asyncVersion"
 						:checkout-status="checkoutStatus"
 						@drop="handleDrop"
 						@open-pr="$emit('open-pr', $event)"
@@ -77,7 +72,6 @@
 						:hidden-labels="mergeHidden"
 						section="merge"
 						:show-repo="showRepo"
-						:async-version="asyncVersion"
 						:checkout-status="checkoutStatus"
 						@drop="handleDrop"
 						@open-pr="$emit('open-pr', $event)"
@@ -93,7 +87,6 @@
 					:hidden-labels="emptySet"
 					section="drafts"
 					:show-repo="showRepo"
-					:async-version="asyncVersion"
 					:checkout-status="checkoutStatus"
 					@drop="handleDrop"
 					@open-pr="$emit('open-pr', $event)"
@@ -255,7 +248,6 @@ export default class PrBoard extends Vue {
 	@Prop({ required : true }) readonly currentTypeFilter!: string;
 	@Prop({ required : true }) readonly currentRepo!: string;
 	@Prop({ required : true }) readonly selectedTeam!: string;
-	@Prop({ required : true }) readonly asyncVersion!: number;
 	@Prop({ required : true }) readonly branches!: any[];
 	@Prop({ required : true }) readonly user!: any;
 	@Prop({ default : null }) readonly checkoutStatus!: GitWorkspaceStatus | null;
@@ -376,7 +368,6 @@ export default class PrBoard extends Vue {
 	}
 
 	get waitingOnChecks(): any[] {
-		void this.asyncVersion;
 		return this.orderedMerge.filter(pr => {
 			const checks = GitHubClient.getChecks(pr.id);
 			return !(checks && checks.failed === 0 && checks.pending === 0);
@@ -384,7 +375,6 @@ export default class PrBoard extends Vue {
 	}
 
 	get readyMerge(): any[] {
-		void this.asyncVersion;
 		return this.orderedMerge.filter(pr => {
 			const checks = GitHubClient.getChecks(pr.id);
 			return checks && checks.failed === 0 && checks.pending === 0;

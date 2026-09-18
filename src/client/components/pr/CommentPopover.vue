@@ -90,9 +90,9 @@
 </template>
 
 <script lang="ts">
-import type { CommentType, PendingComment, ReviewComment }                 from '@/lib/api/githubClient';
+import type { CommentType, PendingComment, PullRequestLocation, ReviewComment } from '@/lib/api/githubClient';
 import GitHubClient             from '@/lib/api/githubClient';
-import { parseCommentType, parseSuggestionBlocks, stripCommentTypePrefix } from '@/lib/api/githubClient';
+import { parseCommentType, parseSuggestionBlocks, stripCommentTypePrefix }      from '@/lib/api/githubClient';
 import { renderGithubMarkdown } from '@/lib/githubMarkdown';
 import { timeAgo }              from '@/lib/utils';
 
@@ -248,6 +248,11 @@ export default class CommentPopover extends Vue {
 		}
 	}
 
+	/** Which pull request this thread belongs to, so resolving writes straight into that record. */
+	get prLocation(): PullRequestLocation {
+		return { owner : this.owner, repo : this.repo, number : this.prNumber };
+	}
+
 	async toggleThreadResolved() {
 		const threadNodeId = this.resolvableThreadNodeId;
 		if (!threadNodeId || this.resolveSubmitting) {
@@ -255,7 +260,7 @@ export default class CommentPopover extends Vue {
 		}
 		this.resolveSubmitting = true;
 		try {
-			await GitHubClient.setReviewThreadResolved(threadNodeId, !this.threadIsResolved);
+			await GitHubClient.setReviewThreadResolved(threadNodeId, !this.threadIsResolved, this.prLocation);
 			this.$emit('comments-updated');
 		}
 		catch {

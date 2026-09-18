@@ -52,6 +52,8 @@ export interface LocalPrStatus {
 	hasUnpushedCommits: boolean;
 	aheadCount: number;
 	checkoutPath: string;
+	/** Commits on the repository's default branch that the checkout is missing; undefined when unknown. */
+	behindDefaultBranchCount?: number;
 }
 
 export async function fetchGitWorkspaceStatus(): Promise<GitWorkspaceStatus> {
@@ -102,16 +104,16 @@ export async function fetchLocalPullRequestFileContent(pr: PullRequestCheckoutTa
 	});
 }
 
-export async function fetchLocalPullRequestStatus(pr: PullRequestCheckoutTarget): Promise<LocalPrStatus> {
-	return postGitJson('/api/git/local-status', { pr }, true);
+export async function fetchLocalPullRequestStatus(pr: PullRequestCheckoutTarget, defaultBranch: string): Promise<LocalPrStatus> {
+	return postGitJson('/api/git/local-status', { pr, defaultBranch }, true);
 }
 
-export async function commitLocalPullRequestChanges(pr: PullRequestCheckoutTarget, message: string): Promise<LocalPrStatus> {
-	return postGitJson('/api/git/commit', { pr, message }, true);
+export async function commitLocalPullRequestChanges(pr: PullRequestCheckoutTarget, message: string, defaultBranch: string): Promise<LocalPrStatus> {
+	return postGitJson('/api/git/commit', { pr, message, defaultBranch }, true);
 }
 
-export async function pushLocalPullRequestChanges(pr: PullRequestCheckoutTarget): Promise<LocalPrStatus> {
-	return postGitJson('/api/git/push', { pr }, true);
+export async function pushLocalPullRequestChanges(pr: PullRequestCheckoutTarget, defaultBranch: string): Promise<LocalPrStatus> {
+	return postGitJson('/api/git/push', { pr, defaultBranch }, true);
 }
 
 export async function mergeDefaultBranchIntoPullRequest(pr: PullRequestCheckoutTarget, defaultBranch: string): Promise<LocalPrStatus> {

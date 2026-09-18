@@ -8,10 +8,15 @@
  * like each other. The pair is replaced by one `renamed` entry carrying a patch PRism computes itself,
  * which is what lets every existing view — split panes, word diff, minimap, rendered markdown — treat it
  * as the single file it is, with no knowledge that GitHub disagreed.
+ *
+ * The reader can also pair two files by hand, for the ones this cannot reach on its own — a file that
+ * changed extension, or was rewritten past recognition. A forced pair skips every test here, because the
+ * only question those tests answer is whether the pair was a good guess, and a forced one is not a guess.
  */
 
 import type { PRFile }           from '@/lib/api/githubClient';
 import { buildUnifiedPatch }     from '@/lib/diff/patchDiff';
+import type { ForcedFilePair }   from '@/lib/forcedFilePairs';
 import { isRenderableMediaFile } from '@/lib/mediaFiles';
 
 /**
@@ -37,19 +42,45 @@ const MAX_COMBINED_LINES = 12000;
 const MAX_EDIT_DISTANCE = 1500;
 
 /**
+ * The same ceiling for a pair the reader forced. It is higher because there is no longer a guess to
+ * disprove — the two files are as far apart as the reader says they are, and the budget is only here to
+ * keep Myers from taking the tab down with it.
+ */
+const MAX_FORCED_EDIT_DISTANCE = 6000;
+
+/**
  * Replaces deletion/addition pairs that are really renames with a single file entry. Files GitHub already
  * paired up are untouched, as is anything this cannot confirm, so a failure here only ever leaves the
- * original list.
+ * original list. `forcedPairs` are the reader's own pairings: they are merged first and take any file they
+ * name out of the running for a detected pair.
  */
-export async function detectRenamedFiles(files: PRFile[], loadContent: RenameContentLoader): Promise<PRFile[]> {
-	const candidates = findRenameCandidates(files);
+export async function detectRenamedFiles(
+	files: PRFile[],
+	loadContent: RenameContentLoader,
+	forcedPairs: ForcedFilePair[] = [],
+	onForcedPairFailed?: ForcedPairFailureReporter
+): Promise<PRFile[]> {
+	const forced     = resolveForcedPairs(files, forcedPairs);
+	const claimed    = new Set(forced.flatMap(pair => [ pair.removed.filename, pair.added.filename ]));
+	const candidates = [
+		...forced,
+		...findRenameCandidates(files).filter(pair => !claimed.has(pair.removed.filename) && !claimed.has(pair.added.filename)),
+	];
 	if (!candidates.length) {
 		return files;
 	}
 
 	// Confirmed together: the file list is already waiting on this, so it costs one round trip, not one
 	// per candidate. A pull request with no candidates at all fetches nothing and pays nothing.
-	const confirmed = await Promise.all(candidates.map(candidate => confirmRename(candidate, loadContent)));
+	// A detected pair that does not work out is simply not a rename and says nothing. A forced one is a
+	// request that failed, so its reason is reported rather than swallowed.
+	const confirmed = await Promise.all(candidates.map(candidate => confirmRename(
+		candidate,
+		loadContent,
+		!candidate.forced || !onForcedPairFailed
+			? undefined
+			: reason => onForcedPairFailed({ removed : candidate.removed.filename, added : candidate.added.filename }, reason)
+	)));
 
 	const merged  = new Map<string, PRFile>();
 	const dropped = new Set<string>();
@@ -130,26 +161,37 @@ export function lineSimilarity(oldLines: string[], newLines: string[]): number {
 }
 
 /** Fetches both sides and, if they still look like one file, builds the entry that says so. */
-async function confirmRename(candidate: RenameCandidate, loadContent: RenameContentLoader): Promise<PRFile | null> {
+async function confirmRename(candidate: RenameCandidate, loadContent: RenameContentLoader, onFailure?: (reason: string) => void): Promise<PRFile | null> {
+	// Each side is taken from its own patch where that holds the whole file, and fetched otherwise.
 	const [ base, head ] = await Promise.all([
-		loadContent(candidate.removed.filename, 'base'),
-		loadContent(candidate.added.filename, 'head'),
+		readSide(candidate.removed, '-', 'base', loadContent),
+		readSide(candidate.added, '+', 'head', loadContent),
 	]);
-	if (base === null || head === null) {
+	if (base.content === null) {
+		onFailure?.(`Could not read ${candidate.removed.filename} from the base commit${base.error ? `: ${base.error}` : ''}`);
+		return null;
+	}
+	if (head.content === null) {
+		onFailure?.(`Could not read ${candidate.added.filename} from the head commit${head.error ? `: ${head.error}` : ''}`);
 		return null;
 	}
 
 	// Split exactly as the split view does, so the patch's line numbers address the lines it renders.
-	const oldLines = base.split('\n');
-	const newLines = head.split('\n');
+	const oldLines = base.content.split('\n');
+	const newLines = head.content.split('\n');
 	if (oldLines.length + newLines.length > MAX_COMBINED_LINES) {
-		return null;
-	}
-	if (lineSimilarity(oldLines, newLines) < MIN_SIMILARITY) {
+		onFailure?.(`${candidate.removed.filename} and ${candidate.added.filename} are too large to diff together (${oldLines.length + newLines.length} lines)`);
 		return null;
 	}
 
-	const patch = buildUnifiedPatch(oldLines, newLines, MAX_EDIT_DISTANCE);
+	// A forced pair has already been judged by the reader, so neither the resemblance test nor a null
+	// patch can overrule it: the two are shown as one file whatever their contents turn out to be.
+	if (!candidate.forced && lineSimilarity(oldLines, newLines) < MIN_SIMILARITY) {
+		return null;
+	}
+
+	const budget = candidate.forced ? MAX_FORCED_EDIT_DISTANCE : MAX_EDIT_DISTANCE;
+	const patch  = buildUnifiedPatch(oldLines, newLines, budget) ?? (candidate.forced ? buildReplacementPatch(oldLines, newLines) : null);
 	if (patch === null) {
 		return null;
 	}
@@ -166,8 +208,75 @@ async function confirmRename(candidate: RenameCandidate, loadContent: RenameCont
 		deletions,
 		changes           : additions + deletions,
 		synthesizedRename : true,
+		...(candidate.forced ? { forcedRename : true } : {}),
 		...(patch ? { patch } : {}),
 	};
+}
+
+/**
+ * Turns stored paths back into the pair of files they name. A pair whose halves are no longer in the pull
+ * request — the commit that deleted the file was dropped, say — is skipped, leaving GitHub's own entries.
+ */
+function resolveForcedPairs(files: PRFile[], forcedPairs: ForcedFilePair[]): RenameCandidate[] {
+	const byPath                   = new Map(files.map(file => [ file.filename, file ]));
+	const pairs: RenameCandidate[] = [];
+	for (const { removed : removedPath, added : addedPath } of forcedPairs) {
+		const removed = byPath.get(removedPath);
+		const added   = byPath.get(addedPath);
+		if (removed?.status === 'removed' && added?.status === 'added') {
+			pairs.push({ removed, added, forced : true });
+		}
+	}
+	return pairs;
+}
+
+/**
+ * The patch for two files with nothing worth aligning: every old line goes, every new line arrives. Only
+ * reached on a forced pair whose edit script blew the budget, where showing the two side by side as a
+ * wholesale rewrite still beats leaving the reader with two unconnected files.
+ */
+function buildReplacementPatch(oldLines: string[], newLines: string[]): string {
+	return [
+		`@@ -1,${oldLines.length} +1,${newLines.length} @@`,
+		...oldLines.map(line => `-${line}`),
+		...newLines.map(line => `+${line}`),
+	].join('\n');
+}
+
+/**
+ * One side's contents, preferring the file's own patch and falling back to a fetch. A read that throws is
+ * reported rather than lost, since a forced pair failing for a reason nobody can see is worse than useless.
+ */
+async function readSide(file: PRFile, marker: '+' | '-', side: 'base' | 'head', loadContent: RenameContentLoader): Promise<{ content: string | null; error: string }> {
+	const fromPatch = wholeFileFromPatch(file, marker);
+	if (fromPatch !== null) {
+		return { content : fromPatch, error : '' };
+	}
+	try {
+		return { content : await loadContent(file.filename, side), error : '' };
+	}
+	catch (error: any) {
+		return { content : null, error : error?.message || 'the read failed' };
+	}
+}
+
+/**
+ * A file GitHub reports as purely added or purely deleted carries its entire contents in its own patch, as
+ * one unbroken run of + or - lines. Taking it from there costs no request and cannot be defeated by a ref
+ * the contents API will not resolve — which is most of what a deletion/addition pair runs into. Anything
+ * that does not match that shape exactly, including a patch GitHub truncated, falls through to a fetch.
+ */
+function wholeFileFromPatch(file: PRFile, marker: '+' | '-'): string | null {
+	const lines = file.patch?.split('\n');
+	if (!lines?.length || !lines[0].startsWith('@@')) {
+		return null;
+	}
+	const body     = lines.slice(1);
+	const expected = marker === '+' ? file.additions : file.deletions;
+	if (!body.length || body.length !== expected || body.some(line => !line.startsWith(marker))) {
+		return null;
+	}
+	return body.map(line => line.slice(1)).join('\n');
 }
 
 function groupByBasename(files: PRFile[]): Map<string, PRFile[]> {
@@ -198,7 +307,12 @@ function countPatchLines(patch: string, marker: '+' | '-'): number {
 /** Reads one side of one file. Returning null abandons the pair, leaving GitHub's own entries in place. */
 export type RenameContentLoader = (path: string, side: 'base' | 'head') => Promise<string | null>;
 
+/** Told why a pair the reader forced could not be built, so the UI can say so instead of quietly undoing it. */
+export type ForcedPairFailureReporter = (pair: ForcedFilePair, reason: string) => void;
+
 export interface RenameCandidate {
 	removed: PRFile;
 	added: PRFile;
+	/** Set when the reader paired these by hand, which waives the checks that guess at a pair. */
+	forced?: boolean;
 }
