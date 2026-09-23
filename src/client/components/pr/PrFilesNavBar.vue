@@ -34,29 +34,36 @@
 					<span class="u-flex-1 u-min-w-0 u-truncate">Pick the file <strong>{{ pairingSource.filename }}</strong> pairs with</span>
 					<button type="button" class="pr-files-pairing-cancel u-flex-shrink-0 u-fs-11 u-fw-600 u-cursor-pointer" @click.stop="pairingSource = null">Cancel</button>
 				</li>
-				<li
-					v-for="{ file, index, pairButton, dimmed } in dropdownRows"
-					:key="file.filename"
-					class="pr-files-dropdown-item u-flex u-items-center u-gap-2 u-fs-13 u-font-mono u-text-primary u-cursor-pointer"
-					:class="{ active : index === currentIndex, 'pairing-dimmed' : dimmed }"
-					@click="onDropdownItemClick(file, index)"
-				>
-					<span v-if="showViewedControls" class="pr-files-dropdown-viewed u-flex-shrink-0" :class="{ checked : viewedFiles[file.filename] === 'VIEWED' }">✓</span>
-					<span class="file-status-icon u-flex-shrink-0" :class="'file-status-' + file.status">{{ fileStatusSymbol(file.status) }}</span>
-					<span class="pr-files-dropdown-item-name u-truncate u-flex-1 u-min-w-0">{{ file.previous_filename ? file.previous_filename + " → " : "" }}{{ file.filename }}</span>
-					<button
-						v-if="pairButton"
-						type="button"
-						class="pr-files-pair-btn u-flex-shrink-0 u-cursor-pointer"
-						:class="{ armed : pairingSource?.filename === file.filename }"
-						:title="pairButton.title"
-						@click.stop="onPairButtonClick(file)"
-					>{{ pairButton.symbol }}</button>
-					<span class="pr-files-dropdown-item-stats u-flex u-gap-1-5 u-flex-shrink-0 u-ml-2">
-						<span class="pr-files-dropdown-item-add">+{{ file.additions }}</span>
-						<span class="pr-files-dropdown-item-del">&minus;{{ file.deletions }}</span>
-					</span>
-				</li>
+				<template v-for="{ file, index, pairButton, dimmed, blockHeader, displayName } in dropdownRows" :key="file.filename">
+					<li v-if="blockHeader" class="pr-files-block-divider u-flex u-items-center u-gap-2 u-fs-12 u-fw-600 u-font-mono u-text-secondary">
+						<span class="u-truncate u-flex-1 u-min-w-0">{{ blockHeader.label }}</span>
+						<span class="pr-files-dropdown-item-stats u-flex u-gap-1-5 u-flex-shrink-0 u-ml-2">
+							<span class="pr-files-dropdown-item-add">+{{ blockHeader.additions }}</span>
+							<span class="pr-files-dropdown-item-del">&minus;{{ blockHeader.deletions }}</span>
+						</span>
+					</li>
+					<li
+						class="pr-files-dropdown-item u-flex u-items-center u-gap-2 u-fs-13 u-font-mono u-text-primary u-cursor-pointer"
+						:class="{ active : index === currentIndex, 'pairing-dimmed' : dimmed }"
+						@click="onDropdownItemClick(file, index)"
+					>
+						<span v-if="showViewedControls" class="pr-files-dropdown-viewed u-flex-shrink-0" :class="{ checked : viewedFiles[file.filename] === 'VIEWED' }">✓</span>
+						<span class="file-status-icon u-flex-shrink-0" :class="'file-status-' + file.status">{{ fileStatusSymbol(file.status) }}</span>
+						<span class="pr-files-dropdown-item-name u-truncate u-flex-1 u-min-w-0">{{ displayName }}</span>
+						<button
+							v-if="pairButton"
+							type="button"
+							class="pr-files-pair-btn u-flex-shrink-0 u-cursor-pointer"
+							:class="{ armed : pairingSource?.filename === file.filename }"
+							:title="pairButton.title"
+							@click.stop="onPairButtonClick(file)"
+						>{{ pairButton.symbol }}</button>
+						<span class="pr-files-dropdown-item-stats u-flex u-gap-1-5 u-flex-shrink-0 u-ml-2">
+							<span class="pr-files-dropdown-item-add">+{{ file.additions }}</span>
+							<span class="pr-files-dropdown-item-del">&minus;{{ file.deletions }}</span>
+						</span>
+					</li>
+				</template>
 			</ul>
 		</div>
 		<button
@@ -111,7 +118,8 @@
 <script setup lang="ts">
 import '@/styles/pr-diff.css';
 
-import type { PRFile } from '@/lib/api/githubClient';
+import type { PRFile }                            from '@/lib/api/githubClient';
+import { groupFilesIntoBlocks, ROOT_BLOCK_LABEL } from '@/lib/diff/fileBlocks';
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
@@ -235,13 +243,39 @@ function onDropdownItemClick(file: PRFile, index: number) {
 	dropdownOpen.value = false;
 }
 
-/** One row per file, with its pairing affordances worked out once rather than per binding. */
-const dropdownRows = computed(() => props.files.map((file, index) => ({
-	file,
-	index,
-	pairButton : pairButtonFor(file),
-	dimmed     : Boolean(pairingSource.value) && !canPairWith(file),
-})));
+/** Each file's folder block; only worth showing when the files span more than one. */
+const fileBlockLabels = computed(() => {
+	const labels = groupFilesIntoBlocks(props.files.map(file => file.filename));
+	return new Set(labels).size > 1 ? labels : null;
+});
+
+/**
+ * One row per file, with its pairing affordances worked out once rather than per binding. A row that
+ * starts a new folder block carries the header for the divider above it: the block's folder and its
+ * line totals. Since that divider names the folder, rows under it drop it from their paths.
+ */
+const dropdownRows = computed(() => {
+	const labels                   = fileBlockLabels.value;
+	let header: BlockHeader | null = null;
+	return props.files.map((file, index) => {
+		const startsBlock = labels != null && labels[index] !== labels[index - 1];
+		if (startsBlock) {
+			header = { label : labels[index], additions : 0, deletions : 0 };
+		}
+		if (header) {
+			header.additions += file.additions;
+			header.deletions += file.deletions;
+		}
+		return {
+			file,
+			index,
+			pairButton  : pairButtonFor(file),
+			dimmed      : Boolean(pairingSource.value) && !canPairWith(file),
+			blockHeader : startsBlock ? header : null,
+			displayName : rowDisplayName(file, labels?.[index]),
+		};
+	});
+});
 
 const currentFile = computed(() => props.files[currentIndex.value] ?? props.files[0]);
 
@@ -357,6 +391,18 @@ onBeforeUnmount(() => {
 	window.visualViewport?.removeEventListener('resize', _resizeHandler);
 	window.visualViewport?.removeEventListener('scroll', _resizeHandler);
 });
+/** A row's path with its block's folder dropped, since the divider above already names it. */
+function rowDisplayName(file: PRFile, blockLabel: string | undefined): string {
+	const strip = (path: string) => blockLabel && blockLabel !== ROOT_BLOCK_LABEL && path.startsWith(blockLabel) ? path.slice(blockLabel.length) : path;
+	return file.previous_filename ? `${strip(file.previous_filename)} → ${strip(file.filename)}` : strip(file.filename);
+}
+
+/** A folder block's divider: its folder and the line changes of the files listed under it. */
+interface BlockHeader {
+	label: string;
+	additions: number;
+	deletions: number;
+}
 </script>
 
 <style scoped>
@@ -481,8 +527,13 @@ onBeforeUnmount(() => {
 .pr-files-dropdown-list {
 	position: absolute;
 	top: 100%;
-	left: 0;
-	right: 0;
+	left: 50%;
+	transform: translateX(-50%);
+	/* Size to the longest row so the stats sit beside the names, but never wider than the trigger */
+	width: max-content;
+	min-width: min(100%, 320px);
+	max-width: 100%;
+	box-sizing: border-box;
 	/* Fallback before first layout measure; inline maxHeight overrides when open */
 	max-height: calc(100dvh - 120px);
 	overflow-y: auto;
@@ -506,6 +557,17 @@ onBeforeUnmount(() => {
 .pr-files-dropdown-item.active {
 	background: var(--bg-tertiary);
 	font-weight: 600;
+}
+
+.pr-files-block-divider {
+	padding: var(--u-2) var(--u-2-5) var(--u-1);
+	border-top: 1px solid var(--border);
+	cursor: default;
+
+	&:first-child {
+		border-top: none;
+		padding-top: var(--u-1);
+	}
 }
 
 .pr-files-dropdown-viewed {
