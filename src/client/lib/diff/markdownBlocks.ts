@@ -33,7 +33,7 @@ const NAMED_ENTITY_CHARS: Record<string, string> = {
 	'&lt;'   : '<',
 	'&gt;'   : '>',
 	'&quot;' : '"',
-	'&#39;'  : '\'',
+	'&#39;'  : "'",
 	'&nbsp;' : ' ',
 };
 

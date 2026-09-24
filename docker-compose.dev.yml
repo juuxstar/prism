@@ -3,7 +3,12 @@ services:
     image: node:24-alpine
     container_name: prism
     working_dir: /app
-    command: sh -c "apk add --no-cache git && npm ci && npm run dev"
+    # Vite serves the client with hot reload; the server proxies everything that is not /api to it.
+    # `--allow-git=all` because the image's npm 11 reads .npmrc's `allow-git=root` but, under `npm ci`, counts
+    # the lockfile's pinned eslint-config-lcb commit as a non-root git dependency and refuses it.
+    command: >-
+      sh -c "apk add --no-cache git && npm ci --allow-git=all &&
+      exec npx concurrently --kill-others --names vite,server vite 'tsx watch src/server/index.ts'"
     volumes:
       - .:/app
       - ${PRISM_CHECKOUT_HOST_DIR:-/Users/juuxstar/code/frontLobby/frontlobby}:${PRISM_CHECKOUT_WORKSPACE_DIR:-/checkout-workspace}

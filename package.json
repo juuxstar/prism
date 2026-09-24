@@ -3,23 +3,8 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"dev": "concurrently \"vite\" \"NODE_ENV=development tsx watch src/server/index.ts\"",
 		"postinstall": "node scripts/prepare-http-decorators.mjs",
-		"build": "vite build && tsc -p src/server/tsconfig.json",
-		"start": "node build/server/index.js",
-		"start:docker": "docker compose up --build",
-		"dev:docker": "docker compose -f docker-compose.dev.yml up",
-		"stop:docker": "docker compose down",
-		"stop:dev:docker": "docker compose -f docker-compose.dev.yml down",
-		"logs:docker": "docker compose logs -f prism",
-		"logs:dev:docker": "docker compose -f docker-compose.dev.yml logs -f prism",
-		"start:dev": "tsx src/server/index.ts",
-		"lint": "eslint .",
-		"lint:fix": "eslint . --fix",
-		"format": "prettier --write .",
-		"format:check": "prettier --check .",
-		"typecheck": "vue-tsc --noEmit",
-		"typecheck:build": "vite build"
+		"start": "node npmStart.mts"
 	},
 	"dependencies": {
 		"@juuxstar/http-decorators": "https://github.com/juuxstar/http-decorators/archive/refs/heads/main.tar.gz",
@@ -34,20 +19,21 @@
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
-		"@frontlobby/eslint-config-lcb": "github:frontlobby/eslint-config-lcb#9.1.5",
+		"@frontlobby/eslint-config-lcb": "github:frontlobby/eslint-config-lcb#semver:9.2.0",
 		"@types/dompurify": "^3.0.5",
 		"@types/express": "^5",
 		"@types/node": "^22",
+		"@types/yargs": "^17.0.35",
 		"@vitejs/plugin-vue": "^5",
 		"concurrently": "^9",
 		"eslint": "^10.9.1",
 		"eslint-plugin-vue": "^10.10.0",
 		"globals": "^17.12.0",
-		"prettier": "3.4.2",
 		"tsx": "^4",
 		"typescript": "^5",
 		"typescript-eslint": "^8.69.0",
 		"vite": "^6",
-		"vue-tsc": "^2"
+		"vue-tsc": "^2",
+		"yargs": "^18.0.0"
 	}
 }

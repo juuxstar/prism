@@ -4,8 +4,9 @@
 		{
 			"name": "prism-dev",
 			"runtimeExecutable": "npm",
-			"runtimeArgs": ["run", "dev"],
-			"port": 3002
+			"runtimeArgs": ["start", "up", "dev"],
+			"port": 8888,
+			"url": "https://prism.dev.localhost:8888"
 		}
 	]
 }

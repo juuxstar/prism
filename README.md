@@ -53,7 +53,7 @@ kanban-style board, and reviews them in a side-by-side diff viewer backed by an 
 3. Click **"New GitHub App"**
 4. Fill in the basic app details:
     - **GitHub App name**: `PRism`
-    - **Homepage URL**: `https://prism.localhost:8888` for the Docker proxy startup, or `http://localhost:5173` for Vite-only development
+    - **Homepage URL**: `https://prism.localhost:8888`
     - **Callback URL**: use the same URL as the homepage if GitHub asks for one; it is not used by the device flow
 5. Disable **Webhook** unless you plan to add webhook handling separately
 6. Set repository permissions for the dashboard features you want:
@@ -78,55 +78,35 @@ export GITHUB_CLIENT_ID=YOUR_GITHUB_CLIENT_ID
 
 For local development only, `src/server/index.ts` includes a fallback Client ID.
 
-### 3. Install and Run with the Local Proxy
+### 3. Install and Run
 
-The default local startup is Docker Compose behind the shared web proxy. The proxy must already be running on this host and must provide the external Docker network named `web-proxy`.
+PRism only runs in Docker, behind the shared web proxy. The proxy must already be running on this host and must provide the external Docker network named `web-proxy`.
+Every command goes through `npm start <command>`; `npm start -- --help` lists them.
 
 ```bash
 npm install
-npm run start:docker
+npm start up
 ```
 
-This builds the PRism image, starts the `prism` service on the shared `web-proxy` network, and lets the host proxy serve it at `https://prism.localhost:8888`.
+That starts the development stack from `docker-compose.dev.yml`: Vite with hot reload and the Express server in one container, served at `https://prism.localhost:8888`.
+Express proxies `/api` itself and forwards everything else to Vite inside the container, so client changes appear without rebuilding the image.
+
+To run the production image instead (built from the `Dockerfile`):
+
+```bash
+npm start up prod
+```
+
+Dev and production share the same hostname (`prism.localhost`) and container name (`prism`), so only one can run at a time. Stop one before starting the other:
+
+```bash
+npm start logs [dev|prod]
+npm start down [dev|prod]
+```
 
 Git checkout actions run inside the PRism server process. The Docker Compose files mount the host checkout workspace at `/checkout-workspace` by default, and PRism detects whether that mounted directory is a Git checkout itself or a parent containing worktree subdirectories. Override `PRISM_CHECKOUT_HOST_DIR` for the host path, or `PRISM_CHECKOUT_WORKSPACE_DIR` if the in-container mount point needs to change.
 
-Useful compose commands:
-
-```bash
-npm run logs:docker
-npm run stop:docker
-```
-
-For Vite development with hot reload through the same proxy URL, stop the production container first, then:
-
-```bash
-npm run dev:docker
-```
-
-Open `https://prism.localhost:8888`. Express proxies `/api` directly and forwards everything else to the Vite dev server inside the container, so client changes appear without rebuilding the image.
-
-```bash
-npm run logs:dev:docker
-npm run stop:dev:docker
-```
-
-Dev and production share the same hostname (`prism.localhost`) and container name (`prism`). Only one can run at a time.
-
-For Vite development without the proxy, you can still run:
-
-```bash
-npm run dev
-```
-
-That starts the Vite dev server on port 5173 and the Express API proxy on port 3002. Open `http://localhost:5173` in your browser.
-
-### 4. Production Build Without Docker
-
-```bash
-npm run build    # builds frontend to dist/
-npm start        # runs Express serving dist/ + API proxy
-```
+`npm install` on the host is still needed for the editor and for `npm start lint` and `npm start typecheck`, which read the source rather than run it.
 
 ## Docker Production Deployment
 
@@ -144,7 +124,7 @@ Prerequisites:
 Start PRism through the proxy:
 
 ```bash
-GITHUB_CLIENT_ID=YOUR_GITHUB_CLIENT_ID npm run start:docker
+GITHUB_CLIENT_ID=YOUR_GITHUB_CLIENT_ID npm start up prod
 ```
 
 Open `https://prism.localhost:8888`.
@@ -152,7 +132,7 @@ Open `https://prism.localhost:8888`.
 Stop it with:
 
 ```bash
-npm run stop:docker
+npm start down prod
 ```
 
 ### Deploy to Ubuntu
@@ -168,10 +148,10 @@ Prerequisites:
 - SSH access to the server
 - The remote user can run Docker directly, or can become root with passwordless `sudo -E docker`
 
-Deploy with the helper script:
+Deploy with `npm start deploy`, which runs `scripts/deploy-image.sh`:
 
 ```bash
-GITHUB_CLIENT_ID=YOUR_GITHUB_CLIENT_ID ./scripts/deploy-image.sh user@YOUR_SERVER_IP_OR_DOMAIN
+GITHUB_CLIENT_ID=YOUR_GITHUB_CLIENT_ID npm start deploy user@YOUR_SERVER_IP_OR_DOMAIN
 ```
 
 By default this:
@@ -186,13 +166,13 @@ By default this:
 You can override the defaults:
 
 ```bash
-GITHUB_CLIENT_ID=YOUR_GITHUB_CLIENT_ID IMAGE_TAG=2026-05-11 TARGET_PLATFORM=linux/amd64 REMOTE_APP_DIR=/home/ubuntu/frontlobby/prism ./scripts/deploy-image.sh user@YOUR_SERVER_IP_OR_DOMAIN
+GITHUB_CLIENT_ID=YOUR_GITHUB_CLIENT_ID IMAGE_TAG=2026-05-11 TARGET_PLATFORM=linux/amd64 REMOTE_APP_DIR=/home/ubuntu/frontlobby/prism npm start deploy user@YOUR_SERVER_IP_OR_DOMAIN
 ```
 
 If the remote SSH user cannot run Docker directly, the deploy script automatically falls back to passwordless `sudo -E docker`. If a server requires the whole remote script to run through sudo, enable remote elevation:
 
 ```bash
-GITHUB_CLIENT_ID=YOUR_GITHUB_CLIENT_ID REMOTE_USE_SUDO_SU=1 ./scripts/deploy-image.sh user@YOUR_SERVER_IP_OR_DOMAIN
+GITHUB_CLIENT_ID=YOUR_GITHUB_CLIENT_ID REMOTE_USE_SUDO_SU=1 npm start deploy user@YOUR_SERVER_IP_OR_DOMAIN
 ```
 
 ### Manual Compose Deployment
@@ -224,6 +204,8 @@ The app uses GitHub's device flow, so the callback URL is not used by the login 
 PRism/
   Dockerfile
   package.json
+  npmStart.mts                  `npm start <command>`: every command this project has
+  .npmrc                        Lets npm 12 install the git-hosted lint config
   docker-compose.yml            Runs PRism behind the shared web-proxy network
   docker-compose.dev.yml        Same proxy URL with Vite hot reload in development
   scripts/
@@ -315,20 +297,21 @@ All GitHub API calls go through the Express proxy at `/api/github/*`, which forw
 Local checkout actions go through `/api/git/*`, where the server runs `git` against the checkout
 workspace mounted into the container.
 
-## Scripts
+## Commands
 
-| Command                   | Description                                                        |
-| ------------------------- | ------------------------------------------------------------------ |
-| `npm run dev`             | Start Vite dev server + Express server on localhost                |
-| `npm run dev:docker`      | Start Vite dev through Docker Compose and the shared proxy         |
-| `npm run start:docker`    | Start production PRism through Docker Compose and the shared proxy |
-| `npm run stop:docker`     | Stop the production Docker Compose PRism service                   |
-| `npm run stop:dev:docker` | Stop the development Docker Compose PRism service                  |
-| `npm run logs:docker`     | Follow production Docker Compose logs for the PRism service        |
-| `npm run logs:dev:docker` | Follow development Docker Compose logs for the PRism service       |
-| `npm run build`           | Build frontend to `dist/`                                          |
-| `npm start`               | Run Express serving `dist/` + API proxy without Docker             |
-| `npm run typecheck`       | Run `vue-tsc` type checking                                        |
+Every command is `npm start <command>`; `npm start -- --help` lists them with their options.
+
+| Command                        | Description                                                               |
+| ------------------------------ | ------------------------------------------------------------------------- |
+| `npm start up [dev\|prod]`     | Start PRism in Docker behind the shared proxy (default `dev`, hot reload) |
+| `npm start up prod`            | Build and start the production image                                      |
+| `npm start -- up --detach`     | Start in the background instead of following the output                   |
+| `npm start down [dev\|prod]`   | Stop and remove the PRism container                                       |
+| `npm start logs [dev\|prod]`   | Follow the PRism container's logs                                         |
+| `npm start build`              | Build the production Docker image                                         |
+| `npm start deploy <user@host>` | Build, upload and restart the image on a server over SSH                  |
+| `npm start lint`               | Run ESLint (`npm start -- lint --fix` to apply fixes)                     |
+| `npm start typecheck`          | Typecheck the client (`vue-tsc`) and the server (`tsc`)                   |
 
 ## Security Notes
 
@@ -339,17 +322,16 @@ workspace mounted into the container.
 
 ## Troubleshooting
 
-| Issue                          | Solution                                                                               |
-| ------------------------------ | -------------------------------------------------------------------------------------- |
-| "Failed to start device flow"  | Verify your GitHub App Client ID in `GITHUB_CLIENT_ID` and that Device Flow is enabled |
-| "The device code has expired"  | Codes expire after ~15 minutes — click sign in again                                   |
-| "Authorization was denied"     | You clicked Cancel on the GitHub page — try again                                      |
-| "Session expired"              | Sign out and sign in again                                                             |
-| No PRs showing                 | Ensure the GitHub App is installed on the repositories and has pull request access     |
-| CORS errors                    | Make sure the Express server is running (`npm run dev` starts both)                    |
-| HMR not updating in dev:docker | Confirm `VITE_DEV_ORIGIN` matches your proxy URL (`https://prism.localhost:8888`)      |
-| `web-proxy` network missing    | Start the shared proxy stack first; PRism's Compose file expects that external network |
-| `prism.localhost:8888` fails   | Confirm the shared proxy is running and the PRism container is attached to `web-proxy` |
+| Issue                         | Solution                                                                               |
+| ----------------------------- | -------------------------------------------------------------------------------------- |
+| "Failed to start device flow" | Verify your GitHub App Client ID in `GITHUB_CLIENT_ID` and that Device Flow is enabled |
+| "The device code has expired" | Codes expire after ~15 minutes — click sign in again                                   |
+| "Authorization was denied"    | You clicked Cancel on the GitHub page — try again                                      |
+| "Session expired"             | Sign out and sign in again                                                             |
+| No PRs showing                | Ensure the GitHub App is installed on the repositories and has pull request access     |
+| HMR not updating in dev       | Confirm `VITE_DEV_ORIGIN` matches your proxy URL (`https://prism.localhost:8888`)      |
+| `web-proxy` network missing   | Start the shared proxy stack first; PRism's Compose file expects that external network |
+| `prism.localhost:8888` fails  | Confirm the shared proxy is running and the PRism container is attached to `web-proxy` |
 
 ## License
 

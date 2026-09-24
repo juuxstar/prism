@@ -11,7 +11,7 @@ COPY scripts/prepare-http-decorators.mjs ./scripts/prepare-http-decorators.mjs
 RUN npm ci
 
 COPY . .
-RUN npm run build
+RUN npx vite build && npx tsc -p src/server/tsconfig.json
 
 FROM node:24-alpine AS production
 

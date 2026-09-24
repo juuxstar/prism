@@ -4,6 +4,11 @@ import tseslint from "typescript-eslint";
 import globals from "globals";
 import vueEslintParser from "vue-eslint-parser";
 
+// typescript-eslint builds one project service for the whole run from the first file that asks for it, so every
+// block must pass the same options: a block with a bare `projectService: true` would drop allowDefaultProject
+// whenever one of its files happened to be linted first.
+const projectService = { allowDefaultProject: ["npmStart.mts"] };
+
 export default [
 	{ ignores: ["node_modules/**", "dist/**", "build/**", "eslint.config.js", "scripts/prepare-http-decorators.mjs"] },
 	...lcb,
@@ -16,7 +21,7 @@ export default [
 			parser: vueEslintParser,
 			parserOptions: {
 				parser: tseslint.parser,
-				projectService: true,
+				projectService,
 				extraFileExtensions: [".vue"],
 				tsconfigRootDir: import.meta.dirname,
 			},
@@ -27,7 +32,7 @@ export default [
 		languageOptions: {
 			parser: tseslint.parser,
 			parserOptions: {
-				projectService: true,
+				projectService,
 				tsconfigRootDir: import.meta.dirname,
 			},
 		},
@@ -39,20 +44,18 @@ export default [
 		languageOptions: {
 			parser: tseslint.parser,
 			parserOptions: {
-				projectService: true,
+				projectService,
 				tsconfigRootDir: import.meta.dirname,
 			},
 			globals: { ...globals.node },
 		},
 	},
 	{
-		files: ["vite.config.ts"],
+		files: ["vite.config.ts", "npmStart.mts"],
 		languageOptions: {
 			parser: tseslint.parser,
 			parserOptions: {
-				projectService: {
-					allowDefaultProject: ["vite.config.ts"],
-				},
+				projectService,
 				tsconfigRootDir: import.meta.dirname,
 			},
 			globals: { ...globals.node },
@@ -95,9 +98,9 @@ export default [
 		},
 	},
 
-	// GitHub API snake_case + PascalCase default imports (LCB naming is stricter)
+	// GitHub API snake_case + PascalCase default imports such as `Yargs` (LCB naming is stricter)
 	{
-		files: ["src/**/*.ts", "**/*.vue", "vite.config.ts"],
+		files: ["src/**/*.ts", "**/*.vue", "vite.config.ts", "npmStart.mts"],
 		rules: {
 			"@typescript-eslint/naming-convention": [
 				"error",
@@ -177,6 +180,8 @@ export default [
 			"vue/no-v-html": "off",
 			"vue/max-attributes-per-line": "off",
 			"vue/singleline-html-element-content-newline": "off",
+			// Its fix pads inline content with newlines, which Vue renders as spaces (e.g. around a button's symbol)
+			"vue/multiline-html-element-content-newline": "off",
 			"vue/html-self-closing": "off",
 			"vue/component-definition-name-casing": "off",
 			"vue/attributes-order": "off",
