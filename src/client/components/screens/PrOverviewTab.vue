@@ -229,7 +229,7 @@
 					</div>
 				</div>
 
-				<div class="pr-detail-description card pr-detail-overview-gutter u-m-0">
+				<div class="pr-detail-description card pr-detail-overview-gutter u-flex u-flex-col u-m-0">
 					<h2 class="u-flex-shrink-0">Description</h2>
 					<div v-if="pr.body" class="pr-detail-body-text markdown-body" v-html="pr.body_html || pr.body"></div>
 					<p v-else class="pr-detail-empty u-flex-shrink-0 u-fs-13 u-text-tertiary">No description provided</p>
@@ -392,7 +392,7 @@
 			</section>
 
 			<section class="pr-detail-col-section pr-detail-col-checks">
-				<div class="pr-detail-checks card pr-detail-overview-gutter">
+				<div class="pr-detail-checks card pr-detail-overview-gutter u-flex u-flex-col">
 					<h2 class="u-flex-shrink-0">Checks ({{ checksSummaryText }})</h2>
 					<div v-if="checksLoading" class="pr-detail-checks-loading u-flex u-items-center u-gap-2 u-fs-13 u-text-secondary u-flex-shrink-0">
 						<span class="async-loader"></span> Loading checks...
@@ -1345,6 +1345,47 @@ export default class PrOverviewTab extends Vue {
 	min-height: 0;
 }
 
+/* Side by side, the columns share the viewport's height and scroll on their own instead of the page. */
+@media (min-width: 901px) {
+	.pr-detail-body-grid {
+		grid-template-rows: minmax(0, 1fr);
+	}
+
+	.pr-detail-col-main {
+		min-height: 0;
+		overflow-y: auto;
+	}
+
+	/* Checks scroll inside their card, so the scrollbar doesn't push the card in from the edge. */
+	.pr-detail-col-checks {
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+	}
+
+	.pr-detail-checks {
+		min-height: 0;
+		max-height: 100%;
+	}
+
+	.pr-detail-checks-list {
+		min-height: 0;
+		overflow-y: auto;
+	}
+
+	/* The description takes whatever height Actions & stats leaves, and scrolls within it. */
+	.pr-detail-description {
+		flex: 1 0 200px;
+		min-height: 200px;
+	}
+
+	.pr-detail-overview .pr-detail-description .pr-detail-body-text {
+		flex: 1 1 0;
+		min-height: 0;
+		max-height: none;
+	}
+}
+
 @media (max-width: 900px) {
 	.pr-detail-body-grid {
 		grid-template-columns: 1fr;
@@ -1407,6 +1448,24 @@ html[data-color-scheme="light"] .pr-detail-overview .card > h2 {
 	line-height: 1.6;
 	max-height: 500px;
 	overflow-y: auto;
+}
+
+/* A thin pill like macOS's own; the global thumb is wider and too close to the card background to see. */
+.pr-detail-description .pr-detail-body-text,
+.pr-detail-checks-list {
+	&::-webkit-scrollbar {
+		width: 8px;
+	}
+
+	&::-webkit-scrollbar-thumb {
+		border: 1px solid transparent;
+		border-radius: 4px;
+		background: var(--border) padding-box;
+
+		&:hover {
+			background: var(--border-hover) padding-box;
+		}
+	}
 }
 
 .markdown-body {
