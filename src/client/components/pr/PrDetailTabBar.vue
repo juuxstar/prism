@@ -29,19 +29,21 @@ const props = defineProps<{
 	localFilesCount: number;
 	changedFilesCount: number;
 	reviewTotal: number;
-	reviewPct: number;
+	reviewedCount: number;
 }>();
 
 const emit = defineEmits<{ 'switch-tab': [tab: 'overview' | 'local-files' | 'pr-files'] }>();
+
+const reviewPct = computed(() => (!props.reviewTotal ? 0 : Math.min(100, Math.round((props.reviewedCount / props.reviewTotal) * 100))));
 
 /** Review progress covers the PR files, so it shows on the Overview tab as well but never on the Local Files tab. */
 const showReviewProgress = computed(() => Boolean(props.reviewTotal) && (props.activeTab === 'pr-files' || props.activeTab === 'overview'));
 
 const reviewProgressStateClass = computed(() => ({
-	complete : props.reviewPct >= 100,
-	partial  : props.reviewPct >= 50 && props.reviewPct < 100,
-	low      : props.reviewPct < 50,
+	complete : reviewPct.value >= 100,
+	partial  : reviewPct.value >= 50 && reviewPct.value < 100,
+	low      : reviewPct.value < 50,
 }));
 
-const reviewBarFillStyle = computed(() => ({ width : `${props.reviewPct}%` }));
+const reviewBarFillStyle = computed(() => ({ width : `${reviewPct.value}%` }));
 </script>

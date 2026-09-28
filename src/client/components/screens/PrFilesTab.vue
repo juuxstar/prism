@@ -216,7 +216,7 @@
 			:owner="owner"
 			:repo="repo"
 			:pr-number="prNumber"
-			:commit-id="commitId"
+			:commit-id="headRef"
 			@close="closeComment"
 			@add-pending="onPopoverAddPending"
 			@remove-pending="onPopoverRemovePending"
@@ -242,10 +242,12 @@ import type { FileSearchMatch }               from '@/lib/diff/fileSearch';
 import {
 	clearSearchMatches, paintSearchMatches, scrollMatchIntoViewHorizontally, searchFileView, supportsSearchPainting
 } from '@/lib/diff/fileSearch';
-import { computeCommonBlocks }                         from '@/lib/diff/patchDiff';
-import type { CommentThread, DiffLine, ScrollSegment } from '@/lib/diff/prDiffTypes';
-import { renderGithubMarkdown }                        from '@/lib/githubMarkdown';
+import { computeCommonBlocks }                           from '@/lib/diff/patchDiff';
+import type { CommentThread, DiffLine, ScrollSegment }   from '@/lib/diff/prDiffTypes';
+import { renderGithubMarkdown }                          from '@/lib/githubMarkdown';
 import { base64ToDataUrl, isRenderableMediaPaths, mediaMimeType } from '@/lib/mediaFiles';
+import { prKey, reviewComments as reviewCommentRecords } from '@/lib/store/prStore';
+import { getDiffFontSize, getDiffTabSize, subscribeDiffSettings } from '@/lib/theme/diffSettings';
 
 import { Component, Prop, Vue, Watch } from 'vue-facing-decorator';
 
@@ -262,7 +264,7 @@ export type PrFileContentLoader = (file: PRFile) => Promise<PrFileContent>;
 
 @Component({
 	components : { DiffMinimap, PrDiffTable, PrFileSearchBar, PrFilesNavBar, PrMarkdownDiff, PrMediaViewer },
-	emits      : [ 'update:fileIndex', 'update:viewed', 'all-viewed', 'add-pending', 'remove-pending', 'edit-pending', 'comments-updated', 'thread-focus-handled', 'pair-files', 'unpair-files', 'dismiss-pair-error' ],
+	emits      : [ 'update:fileIndex', 'update:viewed', 'all-viewed', 'add-pending', 'remove-pending', 'edit-pending', 'thread-focus-handled', 'pair-files', 'unpair-files', 'dismiss-pair-error' ],
 })
 export default class PrFilesTab extends Vue {
 
@@ -273,18 +275,12 @@ export default class PrFilesTab extends Vue {
 	@Prop({ required : true }) readonly baseRef!: string;
 	@Prop({ required : true }) readonly headRef!: string;
 	@Prop({ default : 0 }) readonly initialFileIndex!: number;
-	@Prop({ required : true }) readonly prTitle!: string;
 	@Prop({ required : true }) readonly prNumber!: number;
-	@Prop({ required : true }) readonly prAuthorLogin!: string;
-	@Prop({ default : 4 }) readonly tabSize!: number;
-	@Prop({ default : 12 }) readonly diffFontSize!: number;
 	@Prop({ default : () => ({}) }) readonly viewedFiles!: Record<string, string>;
 	@Prop({ default : '' }) readonly prNodeId!: string;
 	/** Why the reader's last forced file pairing could not be built, if it could not. */
 	@Prop({ default : '' }) readonly pairError!: string;
-	@Prop({ default : () => [] }) readonly reviewComments!: ReviewComment[];
 	@Prop({ default : () => [] }) readonly pendingComments!: PendingComment[];
-	@Prop({ default : '' }) readonly commitId!: string;
 	@Prop({ default : true }) readonly reviewEnabled!: boolean;
 	@Prop({ default : true }) readonly viewedEnabled!: boolean;
 	@Prop({ default : 'No files changed' }) readonly emptyMessage!: string;
@@ -292,6 +288,9 @@ export default class PrFilesTab extends Vue {
 	/** When present, selects the file and scrolls to the line — used from Overview navigation. */
 	@Prop({ default : null }) readonly threadFocusRequest!: ReviewThreadFocusRequest | null;
 
+	/** The reader's diff settings, followed live so the Settings popup applies without a reload. */
+	tabSize: number                    = getDiffTabSize();
+	diffFontSize: number               = getDiffFontSize();
 	currentIndex                       = 0;
 	baseContent: string | null         = null;
 	headContent: string | null         = null;
@@ -347,10 +346,16 @@ export default class PrFilesTab extends Vue {
 	// returns whatever the field was initialized to; only method calls reach the live component from there.
 	private _searchKeyHandler: ((e: KeyboardEvent) => void) | null = null;
 	private _popoverClickOutside: ((e: MouseEvent) => void) | null = null;
+	private _unsubDiffSettings: (() => void) | null                = null;
 
 	/** Which pull request a viewed-mark belongs to, so the mutation can write straight into its record. */
 	get prLocation(): PullRequestLocation {
 		return { owner : this.owner, repo : this.repo, number : this.prNumber };
+	}
+
+	/** Read from their record rather than handed down; the local-files tab has no review to show. */
+	get reviewComments(): ReviewComment[] {
+		return this.reviewEnabled ? reviewCommentRecords.peek(prKey(this.owner, this.repo, this.prNumber))?.data ?? [] : [];
 	}
 
 	get currentFile(): PRFile {
@@ -933,6 +938,13 @@ export default class PrFilesTab extends Vue {
 		this._popoverClickOutside = (e: MouseEvent) => this.onPopoverClickOutside(e);
 		window.addEventListener('keydown', this._searchKeyHandler);
 		document.addEventListener('mousedown', this._popoverClickOutside, true);
+		this._unsubDiffSettings = subscribeDiffSettings(() => {
+			this.tabSize      = getDiffTabSize();
+			this.diffFontSize = getDiffFontSize();
+		});
+		if (this.reviewEnabled) {
+			void GitHubClient.fetchPRReviewComments(this.owner, this.repo, this.prNumber).catch(() => []);
+		}
 		if (this.files.length) {
 			this.loadFileContent();
 		}
@@ -940,6 +952,8 @@ export default class PrFilesTab extends Vue {
 
 	beforeUnmount() {
 		window.removeEventListener('resize', this._resizeHandler);
+		this._unsubDiffSettings?.();
+		this._unsubDiffSettings = null;
 		if (this._searchKeyHandler) {
 			window.removeEventListener('keydown', this._searchKeyHandler);
 			this._searchKeyHandler = null;
@@ -1356,7 +1370,8 @@ export default class PrFilesTab extends Vue {
 	}
 
 	onPopoverCommentsUpdated() {
-		this.$emit('comments-updated');
+		// A comment mutation the store could not fold in itself, so this read is forced past the record's TTL.
+		void GitHubClient.fetchPRReviewComments(this.owner, this.repo, this.prNumber, true).catch(() => []);
 	}
 
 	/** 1-based position of the highlighted match, or 0 when there is nothing highlighted. */

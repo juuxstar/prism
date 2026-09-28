@@ -17,7 +17,7 @@
 								class="pr-overview-action-btn pr-overview-action-approve u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
 								:disabled="approvingPr"
 								title="Approve, clear the α/β/γ review and changes requested labels, and add ready to merge"
-								@click="$emit('approve-pr')"
+								@click="approvePr"
 							>
 								<span v-if="approvingPr" class="async-loader"></span>
 								<template v-else>&#10003; Approve</template>
@@ -31,7 +31,7 @@
 									type="button"
 									class="pr-overview-action-btn pr-overview-action-merge u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
 									:disabled="mergingPr"
-									@click="$emit('merge-pr')"
+									@click="openMergeConfirm"
 								>
 									<span v-if="mergingPr" class="async-loader"></span>
 									<template v-else>Merge</template>
@@ -46,7 +46,7 @@
 									type="button"
 									class="pr-overview-action-btn pr-overview-action-draft u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
 									:disabled="togglingDraft"
-									@click="$emit('toggle-draft')"
+									@click="togglePrDraft"
 								>
 									<span v-if="togglingDraft" class="async-loader"></span>
 									<template v-else>{{ pr.draft ? 'Change to PR' : 'Change to Draft' }}</template>
@@ -57,7 +57,7 @@
 								type="button"
 								class="pr-overview-action-btn pr-overview-action-close u-ml-auto u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
 								:disabled="closingPr"
-								@click="$emit('close-pr')"
+								@click="openCloseConfirm"
 							>
 								<span v-if="closingPr" class="async-loader"></span>
 								<template v-else>Close</template>
@@ -94,7 +94,7 @@
 								class="pr-overview-action-btn pr-overview-action-commit u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
 								:disabled="commitLocalDisabled"
 								:title="commitLocalTitle"
-								@click="$emit('commit-local-changes')"
+								@click="openLocalCommitModal"
 							>
 								<span v-if="committingLocalChanges" class="async-loader"></span>
 								<template v-else>Git Commit</template>
@@ -105,7 +105,7 @@
 								class="pr-overview-action-btn pr-overview-action-push u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
 								:disabled="pushLocalDisabled"
 								:title="pushLocalTitle"
-								@click="$emit('push-local-changes')"
+								@click="pushLocalChanges"
 							>
 								<span v-if="pushingLocalChanges" class="async-loader"></span>
 								<template v-else>Git Push</template>
@@ -116,7 +116,7 @@
 								class="pr-overview-action-btn pr-overview-action-merge-default u-inline-flex u-items-center u-gap-1 u-py-1-5 u-px-3 u-fs-13 u-fw-600 u-cursor-pointer u-whitespace-nowrap"
 								:disabled="mergeDefaultBranchDisabled"
 								:title="mergeDefaultBranchTitle"
-								@click="$emit('merge-default-branch')"
+								@click="openDefaultBranchMergeConfirm"
 							>
 								<span v-if="mergingDefaultBranch" class="async-loader"></span>
 								<template v-else>Merge origin/{{ defaultBranch }}</template>
@@ -127,7 +127,7 @@
 							<span class="pr-detail-action-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide u-flex-shrink-0">Labels</span>
 							<span v-for="label in pr.labels" :key="label.id" class="pr-detail-label u-inline-flex u-items-center u-gap-1 u-fs-12 u-fw-500 u-whitespace-nowrap" :style="labelStyle(label)">
 								{{ label.name }}
-								<button class="pr-detail-label-remove u-fs-14 u-leading-1 u-cursor-pointer" :title="'Remove ' + label.name" @click="$emit('remove-label', label.name)">&times;</button>
+								<button class="pr-detail-label-remove u-fs-14 u-leading-1 u-cursor-pointer" :title="'Remove ' + label.name" @click="removeLabel(label.name)">&times;</button>
 							</span>
 							<span v-if="!pr.labels.length" class="pr-detail-empty u-flex-shrink-0 u-fs-13 u-text-tertiary">No labels</span>
 							<div class="pr-detail-add-label u-relative">
@@ -450,27 +450,125 @@
 				:owner="owner"
 				:repo="repo"
 				:pr-number="prNumber"
-				:commit-id="commitId"
+				:commit-id="headSha"
 				@close="closeReviewReplyPopover"
 				@comments-updated="onReviewPopoverCommentsUpdated"
 			/>
+			<pr-merge-confirm-modal
+				:open="mergeConfirmOpen"
+				:owner="owner"
+				:repo="repo"
+				:pr-number="prNumber"
+				:base-ref="pr.base.ref"
+				:unmet-requirements="mergeConfirmUnmetRequirements"
+				:restore-worktree-label="worktreeToRestoreOnMerge?.label || ''"
+				:merging="mergingPr"
+				@close="closeMergeConfirm"
+				@confirm="confirmMergePr"
+			/>
+			<pr-close-confirm-modal
+				:open="closeConfirmOpen"
+				:owner="owner"
+				:repo="repo"
+				:pr-number="prNumber"
+				:error="closeConfirmError"
+				:closing="closingPr"
+				@close="closeCloseConfirm"
+				@confirm="confirmClosePr"
+			/>
+			<pr-default-branch-merge-confirm-modal
+				:open="defaultBranchMergeConfirmOpen"
+				:default-branch="defaultBranch"
+				:head-ref="pr.head?.ref || ''"
+				:checkout-label="checkoutState?.label || ''"
+				:error="defaultBranchMergeError"
+				:merging="mergingDefaultBranch"
+				@close="closeDefaultBranchMergeConfirm"
+				@confirm="confirmMergeDefaultBranch"
+			/>
+			<pr-error-modal
+				:open="Boolean(approvePrError)"
+				title="Could not approve"
+				title-id="pr-approve-error-title"
+				:message="approvePrError"
+				@close="approvePrError = ''"
+			/>
+			<pr-error-modal
+				:open="Boolean(mergePrError)"
+				title="Could not merge"
+				title-id="pr-merge-error-title"
+				:message="mergePrError"
+				@close="mergePrError = ''"
+			/>
+			<pr-modal-dialog
+				:open="localCommitModalOpen"
+				title="Commit local changes"
+				title-id="local-commit-title"
+				dialog-class="pr-local-commit-modal"
+				:close-disabled="committingLocalChanges || pushingLocalChanges"
+				:focus-on-open="false"
+				@close="closeLocalCommitModal"
+			>
+				<label class="pr-local-commit-label u-flex u-flex-col u-gap-1 u-fs-13 u-fw-600">
+					Commit message
+					<textarea
+						v-model="localCommitMessage"
+						class="pr-local-commit-input u-fs-13"
+						rows="4"
+						:disabled="committingLocalChanges || pushingLocalChanges"
+						@keydown.meta.enter.prevent="confirmLocalCommit"
+						@keydown.ctrl.enter.prevent="confirmLocalCommit"
+					></textarea>
+				</label>
+				<p v-if="localCommitError" class="pr-local-commit-error u-fs-13 u-mb-0">{{ localCommitError }}</p>
+				<div class="pr-merge-confirm-actions pr-local-commit-actions u-flex u-justify-end u-gap-2-5 u-flex-wrap">
+					<button type="button" class="btn btn-secondary" :disabled="committingLocalChanges || pushingLocalChanges" @click="closeLocalCommitModal">Cancel</button>
+					<button type="button" class="btn btn-secondary" :disabled="localCommitActionDisabled" @click="confirmLocalCommit">
+						<span v-if="committingLocalChanges && !commitAndPushRequested" class="async-loader"></span>
+						<template v-else>Commit</template>
+					</button>
+					<button type="button" class="btn pr-merge-confirm-submit" :disabled="localCommitActionDisabled" @click="confirmLocalCommitAndPush">
+						<span v-if="committingLocalChanges && commitAndPushRequested" class="async-loader"></span>
+						<template v-else>Commit &amp; Push</template>
+					</button>
+				</div>
+			</pr-modal-dialog>
 		</Teleport>
 	</div>
 </template>
 
 <script lang="ts">
+import PrCloseConfirmModal              from '@/components/pr/PrCloseConfirmModal.vue';
+import PrDefaultBranchMergeConfirmModal from '@/components/pr/PrDefaultBranchMergeConfirmModal.vue';
+import PrErrorModal                     from '@/components/pr/PrErrorModal.vue';
+import PrMergeConfirmModal              from '@/components/pr/PrMergeConfirmModal.vue';
+import PrModalDialog                    from '@/components/pr/PrModalDialog.vue';
 import type { GitCheckout, GitWorkspaceStatus, LocalPrStatus, PullRequestCheckoutState } from '@/lib/api/gitCheckoutClient';
-import { checkoutStateForPr, checkoutTargetForPr, defaultBranchForPr }                   from '@/lib/api/gitCheckoutClient';
+import {
+	checkoutPullRequestBranch, checkoutStateForPr, checkoutTargetForPr, commitLocalPullRequestChanges, defaultBranchForPr,
+	fetchLocalPullRequestStatus, mergeDefaultBranchIntoPullRequest, pushLocalPullRequestChanges, resetWorktreeToNaturalBranch
+} from '@/lib/api/gitCheckoutClient';
 import type {
-	CheckAnnotation, CheckRunDetail, IssueComment, PullRequestLocation, RepoLabel, ReviewComment, TestFailure
+	AsyncMergeResult, CheckAnnotation, CheckRunDetail, IssueComment, PullRequestLocation, RepoLabel, ReviewComment, TestFailure
 } from '@/lib/api/githubClient';
 import GitHubClient, { isPullRequestConflicted, stripCommentTypePrefix } from '@/lib/api/githubClient';
 import type { CommentThread }   from '@/lib/diff/prDiffTypes';
 import { renderGithubMarkdown } from '@/lib/githubMarkdown';
 import { iconSvg }              from '@/lib/icons';
-import { formatDuration, timeAgo, toCursorFileHref }                     from '@/lib/utils';
+import type { ReviewDecision }  from '@/lib/store/prStore';
+import {
+	detailedChecks, issueComments as issueCommentRecords, prDetails, prKey, repoKey, repoLabels as repoLabelRecords,
+	reviewComments as reviewCommentRecords, reviewDecision as reviewDecisionRecords
+} from '@/lib/store/prStore';
+import { formatDuration, timeAgo, toCursorFileHref } from '@/lib/utils';
 
 import { Component, Prop, Vue, Watch } from 'vue-facing-decorator';
+
+/** Review labels the Approve action clears, matching the board's `α/β/γ: review|changes requested` set. */
+const TEAM_REQUESTED_LABEL = /^\s*[\u03b1\u03b2\u03b3]\s*:\s*(?:review|changes)[\s-]+requested\s*$/i;
+
+/** Label the Approve action adds once the requested-review labels are gone. */
+const READY_TO_MERGE_LABEL = 'ready to merge';
 
 interface OverviewThread {
 	id: number;
@@ -490,39 +588,30 @@ interface TestFailureState {
 	failures: TestFailure[];
 }
 
+/**
+ * Everything on the Overview tab, and every action it offers. The pull request, its checks, labels, comments and
+ * review decision are read from their store records rather than handed down, and the PR and git actions keep
+ * their own in-flight state and dialogs here, since nothing outside this tab shows either.
+ *
+ * The view keeps it mounted while another tab is showing, so a merge poll or a checks poll survives a tab switch,
+ * and calls `refresh()` when the pull request itself is re-read.
+ */
 @Component({
-	emits : [ 'add-label', 'remove-label', 'comments-updated', 'approve-pr', 'merge-pr', 'close-pr', 'toggle-draft', 'open-review-in-files', 'checkout-pr', 'commit-local-changes', 'push-local-changes', 'merge-default-branch' ],
+	components : { PrCloseConfirmModal, PrDefaultBranchMergeConfirmModal, PrErrorModal, PrMergeConfirmModal, PrModalDialog },
+	emits      : [ 'open-review-in-files', 'worktree-changed', 'pr-changed', 'merged' ],
 })
 export default class PrOverviewTab extends Vue {
 
-	@Prop({ required : true }) readonly pr!: any;
 	@Prop({ required : true }) readonly owner!: string;
 	@Prop({ required : true }) readonly repo!: string;
 	@Prop({ required : true }) readonly prNumber!: number;
-	/** Head commit SHA; required when replying / applying suggestions */
-	@Prop({ required : true }) readonly commitId!: string;
-	@Prop({ required : true }) readonly checks!: CheckRunDetail[];
-	@Prop({ required : true }) readonly checksLoading!: boolean;
-	@Prop({ required : true }) readonly repoLabels!: RepoLabel[];
-	@Prop({ default : () => [] }) readonly reviewComments!: ReviewComment[];
-	@Prop({ default : () => [] }) readonly issueComments!: IssueComment[];
-	@Prop({ default : false }) readonly commentsLoading!: boolean;
-	@Prop({ default : null }) readonly reviewDecision!: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null;
-	@Prop({ default : false }) readonly showMergeAction!: boolean;
-	@Prop({ default : false }) readonly approvingPr!: boolean;
-	@Prop({ default : false }) readonly mergingPr!: boolean;
-	@Prop({ default : false }) readonly closingPr!: boolean;
-	@Prop({ default : false }) readonly togglingDraft!: boolean;
+	/** Shared with the header's checkout badge, so the view owns it; `worktree-changed` reports what this tab's git actions did to it. */
 	@Prop({ default : null }) readonly checkoutStatus!: GitWorkspaceStatus | null;
-	@Prop({ default : null }) readonly localPrStatus!: LocalPrStatus | null;
-	@Prop({ default : false }) readonly checkingOutPr!: boolean;
-	@Prop({ default : false }) readonly committingLocalChanges!: boolean;
-	@Prop({ default : false }) readonly pushingLocalChanges!: boolean;
-	@Prop({ default : false }) readonly mergingDefaultBranch!: boolean;
-	@Prop({ default : '' }) readonly checkoutError!: string;
-	@Prop({ default : '' }) readonly localGitError!: string;
 
 	readonly timeAgo = timeAgo;
+
+	checksLoading   = true;
+	commentsLoading = false;
 
 	labelDropdownOpen = false;
 	labelSearch       = '';
@@ -533,6 +622,7 @@ export default class PrOverviewTab extends Vue {
 	/** Bumped every second while checks are in progress so elapsed times stay current. */
 	checkDurationTick = 0;
 	private _checkDurationTimer: ReturnType<typeof setInterval> | null = null;
+	private _checksPollTimer: ReturnType<typeof setInterval> | null    = null;
 
 	/** Review thread ids whose resolved threads are shown expanded (default collapsed). */
 	resolvedThreadsExpanded: Record<number, true> = {};
@@ -548,6 +638,68 @@ export default class PrOverviewTab extends Vue {
 	prUrlCopyState: 'idle' | 'copied'       = 'idle';
 	selectedWorktreePath                    = '';
 	private prUrlCopyResetId: number | null = null;
+
+	approvingPr    = false;
+	approvePrError = '';
+	togglingDraft  = false;
+
+	mergingPr                     = false;
+	mergeConfirmOpen              = false;
+	mergeConfirmUnmetRequirements = false;
+	mergePrError                  = '';
+	private mergePollCancelled    = false;
+
+	closingPr         = false;
+	closeConfirmOpen  = false;
+	closeConfirmError = '';
+
+	localPrStatus: LocalPrStatus | null = null;
+	checkingOutPr                       = false;
+	checkoutError                       = '';
+	localGitError                       = '';
+	committingLocalChanges              = false;
+	pushingLocalChanges                 = false;
+	localCommitModalOpen                = false;
+	localCommitMessage                  = '';
+	localCommitError                    = '';
+	commitAndPushRequested              = false;
+	mergingDefaultBranch                = false;
+	defaultBranchMergeConfirmOpen       = false;
+	defaultBranchMergeError             = '';
+
+	/** The pull request's own record, which the view has already read before this tab is rendered. */
+	get pr(): any {
+		return prDetails.peek(this.prRecordKey)?.data ?? null;
+	}
+
+	get prRecordKey(): string {
+		return prKey(this.owner, this.repo, this.prNumber);
+	}
+
+	/** Head commit SHA; required when replying / applying suggestions */
+	get headSha(): string {
+		return this.pr?.head?.sha || '';
+	}
+
+	get checks(): CheckRunDetail[] {
+		return detailedChecks.peek(this.prRecordKey)?.data ?? [];
+	}
+
+	get repoLabels(): RepoLabel[] {
+		return repoLabelRecords.peek(repoKey(this.owner, this.repo))?.data ?? [];
+	}
+
+	get reviewComments(): ReviewComment[] {
+		return reviewCommentRecords.peek(this.prRecordKey)?.data ?? [];
+	}
+
+	get issueComments(): IssueComment[] {
+		return issueCommentRecords.peek(this.prRecordKey)?.data ?? [];
+	}
+
+	get reviewDecision(): ReviewDecision {
+		return reviewDecisionRecords.peek(this.prRecordKey)?.data ?? null;
+	}
 
 	get reviewPopoverThreadPayload(): CommentThread | null {
 		const t = this.reviewPopoverThread;
@@ -608,6 +760,40 @@ export default class PrOverviewTab extends Vue {
 
 	get showDraftToggle(): boolean {
 		return Boolean(this.pr && this.pr.state === 'open' && !this.pr.merged);
+	}
+
+	/** Any non-draft PR that is not already merged; GitHub answers with an error if the merge is not allowed. */
+	get showMergeAction(): boolean {
+		return Boolean(this.pr && !this.pr.draft && !this.pr.merged) || this.mergingPr;
+	}
+
+	get canToggleDraft(): boolean {
+		return Boolean(this.pr && this.pr.state === 'open' && !this.pr.merged);
+	}
+
+	/** True when GitHub merge state, review, and checks look ready to merge without warnings. */
+	get mergeRequirementsMet(): boolean {
+		if (!this.pr || this.pr.draft || this.pr.state !== 'open' || this.pr.merged) {
+			return false;
+		}
+		if (this.reviewDecision !== 'APPROVED') {
+			return false;
+		}
+		if (this.pr.mergeable === false || this.pr.mergeable === null) {
+			return false;
+		}
+		const ms = this.pr.mergeable_state as string | undefined;
+		return ms && ms !== 'clean' ? false : this.checks.every(check => this.isCheckPassed(check));
+	}
+
+	/** A worktree parked on the PR branch is free again once merged, so it goes back to its directory-named branch. */
+	get worktreeToRestoreOnMerge(): PullRequestCheckoutState | null {
+		const checkout = this.checkoutState;
+		return !checkout || checkout.isMain || checkout.branch === checkout.label ? null : checkout;
+	}
+
+	get localCommitActionDisabled(): boolean {
+		return this.committingLocalChanges || this.pushingLocalChanges || !this.localCommitMessage.trim();
 	}
 
 	get showPrActions(): boolean {
@@ -737,6 +923,16 @@ export default class PrOverviewTab extends Vue {
 	get cursorCheckoutHref(): string {
 		const path = this.cursorCheckoutPath;
 		return path ? toCursorFileHref(path) : '';
+	}
+
+	/** Where this pull request is checked out, or empty; a change means its local status is someone else's now. */
+	get checkoutPath(): string {
+		return this.checkoutState?.path ?? '';
+	}
+
+	@Watch('checkoutPath')
+	onCheckoutPathChanged(): void {
+		void this.refreshLocalPrStatus();
 	}
 
 	@Watch('checkoutStatus', { immediate : true, deep : true })
@@ -878,7 +1074,7 @@ export default class PrOverviewTab extends Vue {
 		this.resolveTogglingThreadId = thread.id;
 		try {
 			await GitHubClient.setReviewThreadResolved(nodeId, !thread.resolved, this.prLocation);
-			this.$emit('comments-updated');
+			void this.loadComments(true);
 		}
 		catch (e: any) {
 			console.error('Failed to toggle review thread resolved:', e);
@@ -994,6 +1190,10 @@ export default class PrOverviewTab extends Vue {
 		return null;
 	}
 
+	get hasPendingChecks(): boolean {
+		return this.checks.some(check => !this.isCheckPassed(check) && !this.isCheckFailed(check));
+	}
+
 	get hasInProgressChecks(): boolean {
 		return this.checks.some(c => c.status === 'in_progress' && c.startedAt);
 	}
@@ -1103,7 +1303,7 @@ export default class PrOverviewTab extends Vue {
 
 	onReviewPopoverCommentsUpdated(): void {
 		this.closeReviewReplyPopover();
-		this.$emit('comments-updated');
+		void this.loadComments(true);
 	}
 
 	openIssueReplyDraft(commentId: number): void {
@@ -1125,7 +1325,7 @@ export default class PrOverviewTab extends Vue {
 			await GitHubClient.createIssueComment(this.owner, this.repo, this.prNumber, this.issueReplyBody.trim());
 			this.issueReplyDraftId = null;
 			this.issueReplyBody    = '';
-			this.$emit('comments-updated');
+			void this.loadComments(true);
 		}
 		catch (e: any) {
 			console.error('Failed to create issue comment:', e);
@@ -1158,10 +1358,13 @@ export default class PrOverviewTab extends Vue {
 
 	mounted() {
 		document.addEventListener('mousedown', this.onOverviewPopoverOutside, true);
+		void this.refresh();
 	}
 
 	beforeUnmount() {
 		document.removeEventListener('mousedown', this.onOverviewPopoverOutside, true);
+		this.mergePollCancelled = true;
+		this.stopChecksPolling();
 		this.stopCheckDurationTimer();
 		if (this.prUrlCopyResetId != null) {
 			window.clearTimeout(this.prUrlCopyResetId);
@@ -1169,14 +1372,540 @@ export default class PrOverviewTab extends Vue {
 	}
 
 	handleAddLabel(name: string) {
-		this.$emit('add-label', name);
+		void this.addLabel(name);
 		this.labelDropdownOpen = false;
 	}
 
 	emitCheckout(): void {
-		this.$emit('checkout-pr', this.showWorktreeSelector ? this.selectedWorktreePath : undefined);
+		void this.checkoutPrBranch(this.showWorktreeSelector ? this.selectedWorktreePath : undefined);
 	}
 
+	/**
+	 * Re-reads everything this tab shows. Each read goes to its store record, so what is already current costs
+	 * nothing; `force` revalidates past the records' TTLs, which is what the header's Refresh button asks for.
+	 */
+	async refresh(force = false): Promise<void> {
+		await Promise.all([
+			this.loadChecks(force),
+			this.loadRepoLabels(force),
+			this.loadComments(force),
+			this.loadReviewDecision(force),
+			this.refreshLocalPrStatus(),
+		]);
+	}
+
+	async loadChecks(force = false): Promise<void> {
+		this.checksLoading = true;
+		try {
+			await GitHubClient.fetchDetailedChecks(this.owner, this.repo, this.prNumber, force);
+			if (this.hasPendingChecks) {
+				this.startChecksPolling();
+			}
+		}
+		catch {
+			/* The record keeps whatever it last held. */
+		}
+		finally {
+			this.checksLoading = false;
+		}
+	}
+
+	startChecksPolling(): void {
+		this.stopChecksPolling();
+		this._checksPollTimer = setInterval(async () => {
+			try {
+				// Forced: the poll runs faster than the record's TTL, and it exists precisely to find out
+				// whether CI has moved — the one thing no version in the store can answer.
+				await GitHubClient.fetchDetailedChecks(this.owner, this.repo, this.prNumber, true);
+				if (!this.hasPendingChecks) {
+					this.stopChecksPolling();
+				}
+			}
+			catch {
+				this.stopChecksPolling();
+			}
+		}, 10000);
+	}
+
+	stopChecksPolling(): void {
+		if (this._checksPollTimer) {
+			clearInterval(this._checksPollTimer);
+			this._checksPollTimer = null;
+		}
+	}
+
+	async loadRepoLabels(force = false): Promise<void> {
+		await GitHubClient.fetchRepoLabels(this.owner, this.repo, force).catch(() => []);
+	}
+
+	async loadComments(force = false): Promise<void> {
+		this.commentsLoading = true;
+		try {
+			await Promise.allSettled([
+				GitHubClient.fetchPRReviewComments(this.owner, this.repo, this.prNumber, force),
+				GitHubClient.fetchPRIssueComments(this.owner, this.repo, this.prNumber, force),
+			]);
+		}
+		finally {
+			this.commentsLoading = false;
+		}
+	}
+
+	async loadReviewDecision(force = false): Promise<void> {
+		await GitHubClient.fetchPullRequestReviewDecision(this.owner, this.repo, this.prNumber, force).catch(() => null);
+	}
+
+	/**
+	 * Only a checked-out pull request has a local status; asking for any other gets a 400. The checkout status
+	 * usually lands after this tab mounts, which is what the watcher on the checkout's path is for.
+	 */
+	async refreshLocalPrStatus(): Promise<void> {
+		const target = checkoutTargetForPr(this.pr);
+		if (!target || !this.checkoutState) {
+			this.localPrStatus = null;
+			return;
+		}
+		try {
+			this.localPrStatus = await fetchLocalPullRequestStatus(target, this.defaultBranch);
+		}
+		catch {
+			this.localPrStatus = null;
+		}
+	}
+
+	async addLabel(name: string): Promise<void> {
+		try {
+			await GitHubClient.addLabel(`${this.owner}/${this.repo}`, this.prNumber, name);
+			const matched = this.repoLabels.find(l => l.name === name);
+			if (matched) {
+				this.pr.labels.push({ id : matched.id, name : matched.name, color : matched.color });
+			}
+		}
+		catch (e: any) {
+			console.error('Failed to add label:', e);
+		}
+	}
+
+	async removeLabel(name: string): Promise<void> {
+		try {
+			await GitHubClient.removeLabel(`${this.owner}/${this.repo}`, this.prNumber, name);
+			this.pr.labels = this.pr.labels.filter((l: any) => l.name !== name);
+		}
+		catch (e: any) {
+			console.error('Failed to remove label:', e);
+		}
+	}
+
+	async approvePr(): Promise<void> {
+		if (this.approvingPr || !this.headSha) {
+			return;
+		}
+		this.approvingPr    = true;
+		this.approvePrError = '';
+		const fullRepo      = `${this.owner}/${this.repo}`;
+		try {
+			await GitHubClient.submitReview(this.owner, this.repo, this.prNumber, this.headSha, [], 'APPROVE');
+			const labelsToRemove = ((this.pr.labels || []) as { name: string }[])
+				.filter(l => typeof l.name === 'string' && TEAM_REQUESTED_LABEL.test(l.name));
+			for (const l of labelsToRemove) {
+				try {
+					await GitHubClient.removeLabel(fullRepo, this.prNumber, l.name);
+					this.pr.labels = (this.pr.labels || []).filter((x: any) => x.name !== l.name);
+				}
+				catch (e: any) {
+					console.error('Failed to remove label after approve:', e);
+				}
+			}
+			const hasReadyToMergeLabel = (this.pr.labels || []).some(
+				(x: any) => typeof x.name === 'string' && x.name.toLowerCase() === READY_TO_MERGE_LABEL
+			);
+			if (!hasReadyToMergeLabel) {
+				try {
+					const readyName
+						= this.repoLabels.find(lab => lab.name.toLowerCase() === READY_TO_MERGE_LABEL)?.name ?? READY_TO_MERGE_LABEL;
+					await GitHubClient.addLabel(fullRepo, this.prNumber, readyName);
+				}
+				catch (e: any) {
+					console.error('Failed to add ready to merge label:', e);
+				}
+			}
+			// Both forced: each record is younger than its TTL, so an unforced read would hand back the
+			// pre-approval labels and decision this action has just changed.
+			try {
+				await GitHubClient.fetchPRDetail(this.owner, this.repo, this.prNumber, true);
+			}
+			catch (e: any) {
+				console.error('Failed to refresh PR labels after approve:', e);
+			}
+			await this.loadReviewDecision(true);
+		}
+		catch (e: any) {
+			console.error('Failed to approve PR:', e);
+			this.approvePrError = typeof e?.message === 'string' && e.message.trim() ? e.message.trim() : 'Failed to approve pull request';
+		}
+		finally {
+			this.approvingPr = false;
+		}
+	}
+
+	async togglePrDraft(): Promise<void> {
+		if (!this.pr || !this.canToggleDraft || this.togglingDraft) {
+			return;
+		}
+		const pullRequestId = this.pr.node_id;
+		if (!pullRequestId) {
+			console.error('Missing pull request node id for draft toggle');
+			return;
+		}
+		this.togglingDraft = true;
+		try {
+			const updated = await GitHubClient.setPullRequestDraft(pullRequestId, !this.pr.draft, this.prLocation);
+			this.pr.draft = updated.draft;
+		}
+		catch (e: any) {
+			console.error('Failed to update draft state:', e);
+		}
+		finally {
+			this.togglingDraft = false;
+		}
+	}
+
+	openMergeConfirm(): void {
+		if (this.mergingPr || !this.pr) {
+			return;
+		}
+		this.mergePrError                  = '';
+		this.mergeConfirmUnmetRequirements = !this.mergeRequirementsMet;
+		this.mergeConfirmOpen              = true;
+	}
+
+	closeMergeConfirm(): void {
+		if (this.mergingPr) {
+			return;
+		}
+		this.mergeConfirmOpen              = false;
+		this.mergeConfirmUnmetRequirements = false;
+	}
+
+	async confirmMergePr(): Promise<void> {
+		if (this.mergingPr || !this.pr) {
+			return;
+		}
+		this.mergePrError = '';
+		this.mergingPr    = true;
+		let mergeResult: AsyncMergeResult;
+		try {
+			mergeResult = await GitHubClient.mergePullRequestSquash(this.owner, this.repo, this.prNumber);
+		}
+		catch (e: any) {
+			console.error('Failed to merge PR:', e);
+			this.mergePrError     = typeof e?.message === 'string' && e.message.trim() ? e.message.trim() : 'Merge failed';
+			this.mergeConfirmOpen = false;
+			this.mergingPr        = false;
+			return;
+		}
+		this.mergeConfirmOpen   = false;
+		this.mergePollCancelled = false;
+		try {
+			if (await this.handleAsyncMergeResult(mergeResult)) {
+				return;
+			}
+			const uuid = mergeResult.status === 'pending' ? mergeResult.details?.uuid : undefined;
+			if (uuid) {
+				await this.pollAsyncMergeResult(uuid);
+			}
+			else {
+				await this.pollUntilMerged();
+			}
+		}
+		finally {
+			this.mergingPr = false;
+		}
+	}
+
+	/** Apply a definitive result from GitHub's async-merge endpoint. Returns true for a terminal result. */
+	private async handleAsyncMergeResult(result: AsyncMergeResult): Promise<boolean> {
+		if (result.status === 'merged') {
+			await this.completeMerge({
+				...this.pr,
+				merged    : true,
+				merged_at : this.pr?.merged_at || new Date().toISOString(),
+				state     : 'closed',
+			});
+			return true;
+		}
+		if (result.status === 'failed') {
+			this.mergePrError = result.details?.message || 'Merge failed';
+			return true;
+		}
+		if (result.status === 'enqueued') {
+			await this.refreshAfterMerge();
+			return true;
+		}
+		return false;
+	}
+
+	/** Poll the merge request itself: GitHub recommends this endpoint over waiting for the PR record to change. */
+	private async pollAsyncMergeResult(uuid: string): Promise<void> {
+		const deadline = Date.now() + 120_000;
+		while (Date.now() < deadline && !this.mergePollCancelled) {
+			try {
+				const result = await GitHubClient.fetchAsyncMergeResult(this.owner, this.repo, this.prNumber, uuid);
+				if (this.mergePollCancelled || await this.handleAsyncMergeResult(result)) {
+					return;
+				}
+			}
+			catch {
+				/* Fall back to the next result check while the merge request is still available. */
+			}
+			await delay(1000);
+		}
+		if (!this.mergePollCancelled) {
+			await this.refreshAfterMerge();
+		}
+	}
+
+	private async pollUntilMerged(): Promise<void> {
+		const deadline = Date.now() + 120_000;
+		while (Date.now() < deadline && !this.mergePollCancelled) {
+			try {
+				const detail = await GitHubClient.fetchPRDetail(this.owner, this.repo, this.prNumber, true);
+				if (this.mergePollCancelled) {
+					return;
+				}
+				if (detail.merged) {
+					await this.completeMerge(detail);
+					return;
+				}
+			}
+			catch {
+				/* Keep polling until deadline */
+			}
+			await delay(2000);
+		}
+		if (!this.mergePollCancelled) {
+			await this.refreshAfterMerge();
+		}
+	}
+
+	/** Restore before reloading so the reloaded checkout status already reflects the freed worktree. */
+	private async completeMerge(mergedPr: any): Promise<void> {
+		await this.restoreWorktreeAfterMerge();
+		await this.refreshAfterMerge(mergedPr);
+	}
+
+	/** The view re-reads the pull request, from `mergedPr` when there is one; this tab re-reads its own panels. */
+	private async refreshAfterMerge(mergedPr?: any): Promise<void> {
+		this.$emit('merged', mergedPr);
+		await this.refresh(true);
+	}
+
+	/** Merging retires the PR branch, so hand the worktree back to its own branch at the latest origin/dev. */
+	private async restoreWorktreeAfterMerge(): Promise<void> {
+		const checkout = this.worktreeToRestoreOnMerge;
+		if (!checkout) {
+			return;
+		}
+		try {
+			this.$emit('worktree-changed', await resetWorktreeToNaturalBranch(checkout.path));
+		}
+		catch (error: any) {
+			this.checkoutError = `Merged, but ${checkout.label} could not be restored: ${error.message || 'reset failed'}`;
+		}
+	}
+
+	openCloseConfirm(): void {
+		if (this.closingPr || !this.pr || this.pr.merged || this.pr.state !== 'open') {
+			return;
+		}
+		this.closeConfirmError = '';
+		this.closeConfirmOpen  = true;
+	}
+
+	closeCloseConfirm(): void {
+		if (this.closingPr) {
+			return;
+		}
+		this.closeConfirmOpen  = false;
+		this.closeConfirmError = '';
+	}
+
+	async confirmClosePr(): Promise<void> {
+		if (this.closingPr || !this.pr) {
+			return;
+		}
+		this.closeConfirmError = '';
+		this.closingPr         = true;
+		try {
+			await GitHubClient.updatePullRequest(this.owner, this.repo, this.prNumber, { state : 'closed' });
+			this.closeConfirmOpen = false;
+			this.$emit('pr-changed');
+		}
+		catch (e: any) {
+			console.error('Failed to close PR:', e);
+			this.closeConfirmError = e.message || 'Failed to close pull request';
+		}
+		finally {
+			this.closingPr = false;
+		}
+	}
+
+	async checkoutPrBranch(worktreePath?: string): Promise<void> {
+		if (!this.pr || this.checkingOutPr) {
+			return;
+		}
+		const target = checkoutTargetForPr(this.pr);
+		if (!target) {
+			this.checkoutError = 'Reload this pull request so branch details are available.';
+			return;
+		}
+		this.checkingOutPr = true;
+		this.checkoutError = '';
+		try {
+			// The new checkout's path reaches the watcher above, which reads its local status.
+			this.$emit('worktree-changed', await checkoutPullRequestBranch(target, worktreePath));
+		}
+		catch (error: any) {
+			this.checkoutError = error.message || 'Checkout failed';
+			this.$emit('worktree-changed');
+		}
+		finally {
+			this.checkingOutPr = false;
+		}
+	}
+
+	openLocalCommitModal(): void {
+		this.localCommitMessage     = '';
+		this.localCommitError       = '';
+		this.localGitError          = '';
+		this.commitAndPushRequested = false;
+		this.localCommitModalOpen   = true;
+	}
+
+	closeLocalCommitModal(): void {
+		if (this.committingLocalChanges || this.pushingLocalChanges) {
+			return;
+		}
+		this.localCommitModalOpen   = false;
+		this.localCommitError       = '';
+		this.commitAndPushRequested = false;
+	}
+
+	async confirmLocalCommit(): Promise<void> {
+		this.commitAndPushRequested = false;
+		await this.commitLocalChanges();
+	}
+
+	async confirmLocalCommitAndPush(): Promise<void> {
+		this.commitAndPushRequested = true;
+		if (await this.commitLocalChanges()) {
+			await this.pushLocalChanges();
+		}
+	}
+
+	private async commitLocalChanges(): Promise<boolean> {
+		if (this.committingLocalChanges) {
+			return false;
+		}
+		const target = checkoutTargetForPr(this.pr);
+		if (!target) {
+			this.localCommitError = 'Reload this pull request so branch details are available.';
+			return false;
+		}
+		const message = this.localCommitMessage.trim();
+		if (!message) {
+			this.localCommitError = 'Commit message is required.';
+			return false;
+		}
+		this.committingLocalChanges = true;
+		this.localCommitError       = '';
+		this.localGitError          = '';
+		try {
+			this.localPrStatus        = await commitLocalPullRequestChanges(target, message, this.defaultBranch);
+			this.localCommitModalOpen = false;
+			this.$emit('worktree-changed');
+			return true;
+		}
+		catch (error: any) {
+			this.localCommitError = error.message || 'Could not commit local changes';
+			this.localGitError    = this.localCommitError;
+			return false;
+		}
+		finally {
+			this.committingLocalChanges = false;
+		}
+	}
+
+	async pushLocalChanges(): Promise<void> {
+		if (this.pushingLocalChanges) {
+			return;
+		}
+		const target = checkoutTargetForPr(this.pr);
+		if (!target) {
+			this.localGitError = 'Reload this pull request so branch details are available.';
+			return;
+		}
+		this.pushingLocalChanges = true;
+		this.localGitError       = '';
+		try {
+			this.localPrStatus = await pushLocalPullRequestChanges(target, this.defaultBranch);
+			// The push moved the PR head, so the view re-reads the pull request — and this tab with it.
+			this.$emit('pr-changed');
+		}
+		catch (error: any) {
+			this.localGitError = error.message || 'Could not push local changes';
+		}
+		finally {
+			this.pushingLocalChanges = false;
+		}
+	}
+
+	openDefaultBranchMergeConfirm(): void {
+		this.defaultBranchMergeError       = '';
+		this.localGitError                 = '';
+		this.defaultBranchMergeConfirmOpen = true;
+	}
+
+	closeDefaultBranchMergeConfirm(): void {
+		if (this.mergingDefaultBranch) {
+			return;
+		}
+		this.defaultBranchMergeConfirmOpen = false;
+		this.defaultBranchMergeError       = '';
+	}
+
+	async confirmMergeDefaultBranch(): Promise<void> {
+		if (this.mergingDefaultBranch) {
+			return;
+		}
+		const target        = checkoutTargetForPr(this.pr);
+		const defaultBranch = this.defaultBranch;
+		if (!target || !defaultBranch) {
+			this.defaultBranchMergeError = 'Reload this pull request so branch details are available.';
+			return;
+		}
+		this.mergingDefaultBranch    = true;
+		this.defaultBranchMergeError = '';
+		this.localGitError           = '';
+		try {
+			this.localPrStatus                 = await mergeDefaultBranchIntoPullRequest(target, defaultBranch);
+			this.defaultBranchMergeConfirmOpen = false;
+			// The merge rewrites the working tree, so the view's local diff and its viewed marks no longer apply.
+			this.$emit('worktree-changed');
+		}
+		catch (error: any) {
+			this.defaultBranchMergeError = error.message || `Could not merge origin/${defaultBranch}`;
+			this.localGitError           = this.defaultBranchMergeError;
+		}
+		finally {
+			this.mergingDefaultBranch = false;
+		}
+	}
+
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise(resolve => setTimeout(resolve, ms));
 }
 </script>
 
@@ -1195,6 +1924,37 @@ export default class PrOverviewTab extends Vue {
 
 .pr-detail-overview-stack {
 	gap: var(--pr-overview-section-spacing);
+}
+
+.pr-local-commit-modal {
+	width: min(440px, calc(100vw - 32px));
+}
+
+.pr-local-commit-input {
+	width: 100%;
+	min-height: 96px;
+	padding: 8px 10px;
+	resize: vertical;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--bg-primary);
+	color: var(--text-primary);
+	font-family: inherit;
+	line-height: 1.45;
+}
+
+.pr-local-commit-input:focus {
+	outline: none;
+	border-color: var(--focus-ring);
+	box-shadow: 0 0 0 1px var(--focus-ring);
+}
+
+.pr-local-commit-error {
+	color: var(--accent-red);
+}
+
+.pr-local-commit-actions {
+	margin-top: 18px;
 }
 
 .pr-detail-action-groups {
