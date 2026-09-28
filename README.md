@@ -85,7 +85,7 @@ Every command goes through `npm start <command>`; `npm start -- --help` lists th
 
 ```bash
 npm install
-npm start up
+npm start prism
 ```
 
 That starts the development stack from `docker-compose.dev.yml`: Vite with hot reload and the Express server in one container, served at `https://prism.localhost:8888`.
@@ -94,13 +94,15 @@ Express proxies `/api` itself and forwards everything else to Vite inside the co
 To run the production image instead (built from the `Dockerfile`):
 
 ```bash
-npm start up prod
+npm start prism prod
 ```
 
-Dev and production share the same hostname (`prism.localhost`) and container name (`prism`), so only one can run at a time. Stop one before starting the other:
+Either runs in the foreground; `npm start -- prism -d` starts it in the background instead (the `--` stops npm reading `-d` as its own flag). Follow a background container's output with `npm start logs [dev|prod]`.
+
+`npm stop` stops the container and keeps it, as FrontLobby's does, whichever environment started it. `npm start down [dev|prod]` stops and removes it.
+Dev and production share the same hostname (`prism.localhost`) and container name (`prism`), so only one can run at a time. Remove one before starting the other:
 
 ```bash
-npm start logs [dev|prod]
 npm start down [dev|prod]
 ```
 
@@ -124,12 +126,12 @@ Prerequisites:
 Start PRism through the proxy:
 
 ```bash
-GITHUB_CLIENT_ID=YOUR_GITHUB_CLIENT_ID npm start up prod
+GITHUB_CLIENT_ID=YOUR_GITHUB_CLIENT_ID npm start prism prod
 ```
 
 Open `https://prism.localhost:8888`.
 
-Stop it with:
+Stop it with `npm stop`, or stop and remove it with:
 
 ```bash
 npm start down prod
@@ -299,19 +301,21 @@ workspace mounted into the container.
 
 ## Commands
 
-Every command is `npm start <command>`; `npm start -- --help` lists them with their options.
+Every command is `npm start <command>`, except `npm stop`; `npm start -- --help` lists them with their options.
+They are spelled after FrontLobby's `npm start` where the two overlap. PRism has no tests, so there is no `npm test`.
 
-| Command                        | Description                                                               |
-| ------------------------------ | ------------------------------------------------------------------------- |
-| `npm start up [dev\|prod]`     | Start PRism in Docker behind the shared proxy (default `dev`, hot reload) |
-| `npm start up prod`            | Build and start the production image                                      |
-| `npm start -- up --detach`     | Start in the background instead of following the output                   |
-| `npm start down [dev\|prod]`   | Stop and remove the PRism container                                       |
-| `npm start logs [dev\|prod]`   | Follow the PRism container's logs                                         |
-| `npm start build`              | Build the production Docker image                                         |
-| `npm start deploy <user@host>` | Build, upload and restart the image on a server over SSH                  |
-| `npm start lint`               | Run ESLint (`npm start -- lint --fix` to apply fixes)                     |
-| `npm start typecheck`          | Typecheck the client (`vue-tsc`) and the server (`tsc`)                   |
+| Command                                 | Description                                                               |
+| --------------------------------------- | ------------------------------------------------------------------------- |
+| `npm start prism [dev\|prod]`           | Start PRism in Docker behind the shared proxy (default `dev`, hot reload) |
+| `npm start prism prod`                  | Build and start the production image                                      |
+| `npm start -- prism -d`                 | Start in the background instead of following the output (`--detach`)      |
+| `npm stop`                              | Stop the PRism container and keep it                                      |
+| `npm start down [dev\|prod]`            | Stop and remove the PRism container                                       |
+| `npm start logs [dev\|prod]`            | Follow the PRism container's logs                                         |
+| `npm start build`                       | Build the production Docker image                                         |
+| `npm start deploy <user@host>`          | Build, upload and restart the image on a server over SSH                  |
+| `npm start lint`                        | Run ESLint (`npm start -- lint --fix` to apply fixes)                     |
+| `npm start typecheck [client\|server]`  | Typecheck the client (`vue-tsc`) and the server (`tsc`), both by default  |
 
 ## Security Notes
 
