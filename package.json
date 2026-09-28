@@ -4,7 +4,8 @@
 	"type": "module",
 	"scripts": {
 		"postinstall": "node scripts/prepare-http-decorators.mjs",
-		"start": "node npmStart.mts"
+		"start": "node npmStart.mts",
+		"stop": "docker compose stop"
 	},
 	"dependencies": {
 		"@juuxstar/http-decorators": "https://github.com/juuxstar/http-decorators/archive/refs/heads/main.tar.gz",

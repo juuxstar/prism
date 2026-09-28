@@ -7,10 +7,11 @@ import Yargs from 'yargs';
 
 /**
  * The one entry point for every command this project has, shaped after the sibling frontlobby project's
- * `npmStart.mts`. `package.json` keeps only the npm lifecycle hook and `start`; everything else is
+ * `npmStart.mts`, and spelled like it where the two overlap: `prism [env]` starts the app as `fl [env]` does, and
+ * `npm stop` stops it. `package.json` keeps only the npm lifecycle hook, `start` and `stop`; everything else is
  * `npm start <command>`, with `--help` generated from the declarations below.
  *
- * PRism itself only ever runs in Docker: `up`, `down`, `logs`, `build` and `deploy` all go through Compose or
+ * PRism itself only ever runs in Docker: `prism`, `down`, `logs`, `build` and `deploy` all go through Compose or
  * the image. `lint` and `typecheck` read the source rather than run it, so they use the host's
  * `node_modules`, which is the same install the editor's ESLint integration reads.
  */
@@ -18,7 +19,11 @@ import Yargs from 'yargs';
 /** Every spawn runs from here, so `npm start` works from a subdirectory and relative paths mean one thing. */
 const root = path.dirname(fileURLToPath(import.meta.url));
 
-/** The Compose file behind each environment. Both run a container named `prism`, so only one can be up at once. */
+/**
+ * The Compose file behind each environment. Both run a container named `prism`, so only one can be up at once.
+ * Both also declare the same project and service, which is why `package.json`'s bare `docker compose stop` (`npm stop`)
+ * stops the container whichever file started it.
+ */
 const composeFiles: Record<Environment, string> = { dev : 'docker-compose.dev.yml', prod : 'docker-compose.yml' };
 
 /** Up here rather than with the helpers: a `const` is not hoisted, and the yargs chain below reads it. */
@@ -32,7 +37,7 @@ const yargs = Yargs(process.argv.slice(2));
 const argv  = await yargs
 	.scriptName('npm start')
 	.usage('$0 <command> [options]')
-	.command('up [env]', 'starts PRism in Docker behind the shared web-proxy (dev has Vite hot reload, prod builds the image)', builder => builder
+	.command('prism [env]', 'starts PRism in Docker behind the shared web-proxy (dev has Vite hot reload, prod builds the image)', builder => builder
 		.positional('env', environmentPositional)
 		.option('d', {
 			alias    : 'detach',
@@ -40,7 +45,7 @@ const argv  = await yargs
 			type     : 'boolean',
 			default  : false,
 		}))
-	.command('down [env]', 'stops and removes the PRism container', builder => builder
+	.command('down [env]', 'stops and removes the PRism container (`npm stop` stops it and keeps it)', builder => builder
 		.positional('env', environmentPositional))
 	.command('logs [env]', "follows the PRism container's logs", builder => builder
 		.positional('env', environmentPositional))
@@ -49,7 +54,8 @@ const argv  = await yargs
 		.positional('target', { describe : 'the SSH destination, e.g. ubuntu@example.com', type : 'string', demandOption : true }))
 	.command('lint', 'runs ESLint over the project', builder => builder
 		.option('f', { alias : 'fix', describe : 'apply the fixes ESLint can make itself', type : 'boolean', default : false }))
-	.command('typecheck', 'typechecks the client and the server without emitting')
+	.command('typecheck [project]', 'typechecks the client and the server without emitting', builder => builder
+		.positional('project', { describe : 'check only this one; both when omitted', choices : [ 'client', 'server' ] as const }))
 	.help('h')
 	.alias('h', 'help')
 	.wrap(yargs.terminalWidth())
@@ -77,7 +83,7 @@ async function dispatch(): Promise<number> {
 	const env     = argv.env as Environment;
 
 	switch (command) {
-		case 'up':
+		case 'prism':
 			return run('docker', [ ...compose(env), 'up', ...(env === 'prod' ? [ '--build' ] : []), ...(argv.detach ? [ '--detach' ] : []) ]);
 		case 'down':
 			return run('docker', [ ...compose(env), 'down' ]);
@@ -90,7 +96,7 @@ async function dispatch(): Promise<number> {
 		case 'lint':
 			return run(bin('eslint'), [ ...(argv.fix ? [ '--fix' ] : []), '.' ]);
 		case 'typecheck':
-			return typecheck();
+			return typecheck(argv.project as Project | undefined);
 		default:
 			// `.strict()` rejects anything undeclared, so reaching here means a declared command lost its case.
 			throw new Error(`"${command}" is a declared command with no handler — add a case for it in npmStart.mts`);
@@ -98,17 +104,18 @@ async function dispatch(): Promise<number> {
 }
 
 /**
- * Both halves, even after one fails, so a long-standing error in one cannot hide what the other would report.
+ * The one project asked for, or else both, even after one fails, so a long-standing error in one cannot hide what
+ * the other would report.
  * The server is only otherwise compiled inside the Docker build, so this is where its type errors surface on the host.
  */
-async function typecheck(): Promise<number> {
-	const checks: [ string, string, string[] ][] = [
+async function typecheck(only?: Project): Promise<number> {
+	const checks: [ Project, string, string[] ][] = [
 		[ 'client', bin('vue-tsc'), [ '--noEmit' ] ],
 		[ 'server', bin('tsc'), [ '--noEmit', '-p', 'src/server/tsconfig.json' ] ],
 	];
 	const failed: string[] = [];
 
-	for (const [ name, command, args ] of checks) {
+	for (const [ name, command, args ] of checks.filter(([ project ]) => !only || project === only)) {
 		console.info(styleText('blueBright', `typechecking ${name}...`));
 		if (await run(command, args) !== 0) {
 			failed.push(name);
@@ -150,5 +157,7 @@ function run(command: string, args: string[]): Promise<number> {
 }
 
 type Environment = 'dev' | 'prod';
+
+type Project = 'client' | 'server';
 
 type ChildProcess = ReturnType<typeof spawn>;
