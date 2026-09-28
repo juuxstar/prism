@@ -99,11 +99,10 @@ npm start prism prod
 
 Either runs in the foreground; `npm start -- prism -d` starts it in the background instead (the `--` stops npm reading `-d` as its own flag). Follow a background container's output with `npm start logs [dev|prod]`.
 
-`npm stop` stops the container and keeps it, as FrontLobby's does, whichever environment started it. `npm start down [dev|prod]` stops and removes it.
-Dev and production share the same hostname (`prism.localhost`) and container name (`prism`), so only one can run at a time. Remove one before starting the other:
+Dev and production share the same hostname (`prism.localhost`) and container name (`prism`), so only one can run at a time. Stop one before starting the other; `npm stop` stops it, as FrontLobby's does, whichever environment started it:
 
 ```bash
-npm start down [dev|prod]
+npm stop
 ```
 
 Git checkout actions run inside the PRism server process. The Docker Compose files mount the host checkout workspace at `/checkout-workspace` by default, and PRism detects whether that mounted directory is a Git checkout itself or a parent containing worktree subdirectories. Override `PRISM_CHECKOUT_HOST_DIR` for the host path, or `PRISM_CHECKOUT_WORKSPACE_DIR` if the in-container mount point needs to change.
@@ -131,10 +130,10 @@ GITHUB_CLIENT_ID=YOUR_GITHUB_CLIENT_ID npm start prism prod
 
 Open `https://prism.localhost:8888`.
 
-Stop it with `npm stop`, or stop and remove it with:
+Stop it with:
 
 ```bash
-npm start down prod
+npm stop
 ```
 
 ### Deploy to Ubuntu
@@ -309,8 +308,7 @@ They are spelled after FrontLobby's `npm start` where the two overlap. PRism has
 | `npm start prism [dev\|prod]`           | Start PRism in Docker behind the shared proxy (default `dev`, hot reload) |
 | `npm start prism prod`                  | Build and start the production image                                      |
 | `npm start -- prism -d`                 | Start in the background instead of following the output (`--detach`)      |
-| `npm stop`                              | Stop the PRism container and keep it                                      |
-| `npm start down [dev\|prod]`            | Stop and remove the PRism container                                       |
+| `npm stop`                              | Stop the PRism container, whichever environment started it                |
 | `npm start logs [dev\|prod]`            | Follow the PRism container's logs                                         |
 | `npm start build`                       | Build the production Docker image                                         |
 | `npm start deploy <user@host>`          | Build, upload and restart the image on a server over SSH                  |

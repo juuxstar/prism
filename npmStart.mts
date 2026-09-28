@@ -11,7 +11,7 @@ import Yargs from 'yargs';
  * `npm stop` stops it. `package.json` keeps only the npm lifecycle hook, `start` and `stop`; everything else is
  * `npm start <command>`, with `--help` generated from the declarations below.
  *
- * PRism itself only ever runs in Docker: `prism`, `down`, `logs`, `build` and `deploy` all go through Compose or
+ * PRism itself only ever runs in Docker: `prism`, `logs`, `build` and `deploy` all go through Compose or
  * the image. `lint` and `typecheck` read the source rather than run it, so they use the host's
  * `node_modules`, which is the same install the editor's ESLint integration reads.
  */
@@ -45,8 +45,6 @@ const argv  = await yargs
 			type     : 'boolean',
 			default  : false,
 		}))
-	.command('down [env]', 'stops and removes the PRism container (`npm stop` stops it and keeps it)', builder => builder
-		.positional('env', environmentPositional))
 	.command('logs [env]', "follows the PRism container's logs", builder => builder
 		.positional('env', environmentPositional))
 	.command('build', 'builds the production Docker image')
@@ -85,8 +83,6 @@ async function dispatch(): Promise<number> {
 	switch (command) {
 		case 'prism':
 			return run('docker', [ ...compose(env), 'up', ...(env === 'prod' ? [ '--build' ] : []), ...(argv.detach ? [ '--detach' ] : []) ]);
-		case 'down':
-			return run('docker', [ ...compose(env), 'down' ]);
 		case 'logs':
 			return run('docker', [ ...compose(env), 'logs', '--follow', 'prism' ]);
 		case 'build':
