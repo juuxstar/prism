@@ -214,9 +214,13 @@
 								></button>
 							</div>
 						</div>
-						<div v-if="asanaCardUrl" class="pr-detail-stat pr-detail-stat-asana u-flex u-flex-col u-gap-0-5">
+						<div v-if="asanaCardUrl || issueCommentsLoaded" class="pr-detail-stat pr-detail-stat-asana u-flex u-flex-col u-gap-0-5">
 							<span class="pr-detail-stat-label u-fs-11 u-text-secondary u-uppercase u-tracking-wide">Asana Card</span>
-							<div class="pr-detail-stat-asana-row u-flex u-items-center u-gap-1-5 u-min-w-0">
+							<span v-if="!asanaCardUrl" class="pr-detail-asana-missing u-inline-flex u-items-center u-gap-1-5 u-fs-12 u-fw-600">
+								<span class="pr-detail-asana-missing-dot u-flex-shrink-0"></span>
+								No Asana card linked in the description or comments
+							</span>
+							<div v-else class="pr-detail-stat-asana-row u-flex u-items-center u-gap-1-5 u-min-w-0">
 								<a
 									:href="asanaCardUrl"
 									target="_blank"
@@ -721,6 +725,11 @@ export default class PrOverviewTab extends Vue {
 
 	get issueComments(): IssueComment[] {
 		return issueCommentRecords.peek(this.prRecordKey)?.data ?? [];
+	}
+
+	/** Whether the issue comments have been read once, so a missing Asana card is known rather than not yet looked for. */
+	get issueCommentsLoaded(): boolean {
+		return issueCommentRecords.peek(this.prRecordKey) != null;
 	}
 
 	get reviewDecision(): ReviewDecision {
@@ -2136,6 +2145,22 @@ function delay(ms: number): Promise<void> {
 }
 
 .pr-detail-conflict-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: currentColor;
+}
+
+.pr-detail-asana-missing {
+	justify-self: start;
+	padding: 2px 8px;
+	border: 1px solid color-mix(in srgb, var(--accent-orange) 45%, transparent);
+	border-radius: var(--radius-sm);
+	background: color-mix(in srgb, var(--accent-orange) 12%, transparent);
+	color: var(--accent-orange);
+}
+
+.pr-detail-asana-missing-dot {
 	width: 8px;
 	height: 8px;
 	border-radius: 50%;
