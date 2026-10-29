@@ -66,6 +66,7 @@ import type { GitWorkspaceStatus }       from '@/lib/api/gitCheckoutClient';
 import { checkoutMatchesPullRequest, fetchGitWorkspaceStatus } from '@/lib/api/gitCheckoutClient';
 import type { AccessibleRepo, ApiError } from '@/lib/api/githubClient';
 import GitHubClient                      from '@/lib/api/githubClient';
+import { clearDashboardSnapshot, readDashboardSnapshot, writeDashboardSnapshot }                from '@/lib/dashboardSnapshot';
 import { fetchGithubDashboardStatus, type GithubStatusBannerLevel }                             from '@/lib/githubStatus';
 
 import { defineAsyncComponent }  from 'vue';
@@ -154,6 +155,7 @@ export default class App extends Vue {
 	}
 
 	beforeUnmount() {
+		this.saveSnapshot();
 		this.stopChecksPolling();
 		this.stopGithubStatusPolling();
 	}
@@ -255,8 +257,12 @@ export default class App extends Vue {
 			return true;
 		}
 		if (error.status === 401) {
+			// Whoever signs in next may be someone else, and the snapshot paints before their login is known.
 			clearToken();
-			this.user = null;
+			clearDashboardSnapshot();
+			this.user            = null;
+			this.allPRs          = [];
+			this.accessibleRepos = [];
 			this.showScreen('auth');
 			return true;
 		}
@@ -333,6 +339,7 @@ export default class App extends Vue {
 		this._lastGithubStatusFingerprint      = '';
 		this.githubStatusVisible               = false;
 		clearToken();
+		clearDashboardSnapshot();
 		GitHubClient.clear();
 		this.allPRs          = [];
 		this.accessibleRepos = [];
@@ -419,7 +426,29 @@ export default class App extends Vue {
 				this._cardDataPending = false;
 				// Card data backfills the head/base refs that worktree-to-PR matching needs.
 				void this.refreshWorktreePullRequests();
+				this.saveSnapshot();
 			});
+	}
+
+	private saveSnapshot() {
+		if (this.currentScreen === 'pr') {
+			writeDashboardSnapshot(this.user, this.accessibleRepos, this.allPRs);
+		}
+	}
+
+	/** Paint the last board this browser rendered, so the requests below revalidate it instead of gating it. */
+	private restoreSnapshot(): boolean {
+		const snapshot = readDashboardSnapshot();
+		if (!snapshot) {
+			return false;
+		}
+		GitHubClient.restoreCardData(snapshot.cardData);
+		this.user            = snapshot.user;
+		this.accessibleRepos = snapshot.accessibleRepos;
+		this.allPRs          = snapshot.prs;
+		this.refreshing      = true;
+		this.showScreen('pr');
+		return true;
 	}
 
 	// ── Checks polling ─────────────────────────────────────
@@ -616,11 +645,21 @@ export default class App extends Vue {
 	// ── Main init ──────────────────────────────────────────
 
 	async loadData() {
-		this.showScreen('loading');
+		const restored = this.restoreSnapshot();
+		if (!restored) {
+			this.showScreen('loading');
+		}
 		try {
 			await GitHubClient.fetchCurrentUser();
+			if (restored && GitHubClient.getUser()?.login !== this.user?.login) {
+				// The token now belongs to someone else, so what was painted is not theirs to see.
+				clearDashboardSnapshot();
+				this.allPRs = [];
+				this.showScreen('loading');
+			}
 			if (!GitHubClient.hasOAuthScope('repo')) {
 				clearToken();
+				clearDashboardSnapshot();
 				GitHubClient.clear();
 				this.loginDisabled = false;
 				this.showError('GitHub needs the repo scope to list private repositories and write pull request changes, comments, and PR state. Please sign in again and approve the updated permissions.');
@@ -629,6 +668,7 @@ export default class App extends Vue {
 			this.user            = GitHubClient.getUser();
 			this.accessibleRepos = await GitHubClient.fetchAccessibleRepos();
 			await this.fetchPRs(this.currentRepo || undefined);
+			this.refreshing = false;
 			this.showScreen('pr');
 			void this.refreshCheckoutStatus();
 			this.fetchAsyncData();
@@ -637,7 +677,8 @@ export default class App extends Vue {
 			this.startGithubStatusPolling();
 		}
 		catch (error: any) {
-			const handled = await this.handleApiError(error);
+			this.refreshing = false;
+			const handled   = await this.handleApiError(error);
 			if (!handled) {
 				this.showError(error.message);
 			}

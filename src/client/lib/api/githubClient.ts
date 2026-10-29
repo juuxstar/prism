@@ -646,6 +646,54 @@ class GitHubAPI {
 		return this.userNameCache.get(login) || login;
 	}
 
+	/** Everything a board card for `prs` renders beyond the PR itself, in a form that survives a page load. */
+	snapshotCardData(prs: any[]): CardDataSnapshot {
+		const cards: CardDataSnapshot['cards']   = {};
+		const firstNames: Record<string, string> = {};
+		for (const pr of prs) {
+			const key  = cardKey(pr.id);
+			cards[key] = {
+				version      : cardVersion(pr),
+				stats        : prStats.peek(key)?.data,
+				mergeability : prMergeability.peek(key)?.data,
+				checks       : prChecks.peek(key)?.data,
+				botCounts    : prBotCounts.peek(key)?.data,
+			};
+			const login = pr.user?.login;
+			if (login && this.userNameCache.has(login)) {
+				firstNames[login] = this.userNameCache.get(login)!;
+			}
+		}
+		return { cards, firstNames };
+	}
+
+	/**
+	 * Seed the card stores from a snapshot so a board can render before any request lands. Each record keeps the
+	 * version it was saved at, so the next `fetchPrCardData` still refetches every card whose PR has moved since.
+	 */
+	restoreCardData(snapshot: CardDataSnapshot): void {
+		for (const [ key, card ] of Object.entries(snapshot.cards)) {
+			const meta = { version : card.version };
+			if (card.stats && !prStats.peek(key)) {
+				prStats.set(key, card.stats, meta);
+			}
+			if (card.mergeability && !prMergeability.peek(key)) {
+				prMergeability.set(key, card.mergeability, meta);
+			}
+			if (card.checks && !prChecks.peek(key)) {
+				prChecks.set(key, card.checks, meta);
+			}
+			if (card.botCounts && !prBotCounts.peek(key)) {
+				prBotCounts.set(key, card.botCounts, meta);
+			}
+		}
+		for (const [ login, firstName ] of Object.entries(snapshot.firstNames)) {
+			if (!this.userNameCache.has(login)) {
+				this.userNameCache.set(login, firstName);
+			}
+		}
+	}
+
 	async addLabel(repo: string, issueNumber: number, label: string) {
 		return this.apiFetch(`/repos/${repo}/issues/${issueNumber}/labels`, {
 			method : 'POST',
@@ -1715,6 +1763,17 @@ export interface AsyncMergeResult {
 		uuid?: string;
 		sha?: string;
 	};
+}
+
+export interface CardDataSnapshot {
+	cards: Record<string, {
+		version: string;
+		stats?: PRStats;
+		mergeability?: PRMergeability;
+		checks?: ChecksSummary;
+		botCounts?: BotCounts;
+	}>;
+	firstNames: Record<string, string>;
 }
 
 export interface AccessibleRepo {
