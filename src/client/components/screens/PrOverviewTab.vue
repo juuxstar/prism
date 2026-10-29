@@ -10,7 +10,7 @@
 					</div>
 					<div class="pr-detail-action-groups u-flex u-flex-col u-gap-2">
 						<div v-if="showPrActions" class="pr-detail-action-row u-flex u-flex-wrap u-items-center u-gap-2">
-							<span class="pr-detail-action-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide u-flex-shrink-0">PR Actions</span>
+							<span class="pr-detail-action-label u-fs-11 u-text-secondary u-uppercase u-tracking-wide u-flex-shrink-0">PR Actions</span>
 							<button
 								v-if="showApproveAction"
 								type="button"
@@ -64,7 +64,7 @@
 							</button>
 						</div>
 						<div v-if="showGitActions" class="pr-detail-action-row u-flex u-flex-wrap u-items-center u-gap-2">
-							<span class="pr-detail-action-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide u-flex-shrink-0">Git Actions</span>
+							<span class="pr-detail-action-label u-fs-11 u-text-secondary u-uppercase u-tracking-wide u-flex-shrink-0">Git Actions</span>
 							<span v-if="showCheckoutAction" class="pr-overview-checkout-control u-inline-flex u-items-center u-gap-2 u-flex-wrap">
 								<select
 									v-if="showWorktreeSelector"
@@ -124,7 +124,7 @@
 							<span v-if="defaultBranchBehindText" class="pr-overview-behind-label u-ml-auto u-fs-12 u-whitespace-nowrap">{{ defaultBranchBehindText }}</span>
 						</div>
 						<div class="pr-detail-action-row u-flex u-flex-wrap u-items-center u-gap-2">
-							<span class="pr-detail-action-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide u-flex-shrink-0">Labels</span>
+							<span class="pr-detail-action-label u-fs-11 u-text-secondary u-uppercase u-tracking-wide u-flex-shrink-0">Labels</span>
 							<span v-for="label in pr.labels" :key="label.id" class="pr-detail-label u-inline-flex u-items-center u-gap-1 u-fs-12 u-fw-500 u-whitespace-nowrap" :style="labelStyle(label)">
 								{{ label.name }}
 								<button class="pr-detail-label-remove u-fs-14 u-leading-1 u-cursor-pointer" :title="'Remove ' + label.name" @click="removeLabel(label.name)">&times;</button>
@@ -160,14 +160,14 @@
 					<p v-if="localGitError" class="pr-overview-checkout-error u-m-0 u-fs-13">{{ localGitError }}</p>
 					<div class="pr-detail-stat-grid u-flex u-flex-wrap u-items-start u-gap-3 u-text-center">
 						<div class="pr-detail-stat pr-detail-stat-author u-flex u-flex-col u-gap-0-5">
-							<span class="pr-detail-stat-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide">Author</span>
+							<span class="pr-detail-stat-label u-fs-11 u-text-secondary u-uppercase u-tracking-wide">Author</span>
 							<div class="pr-detail-stat-author-row u-flex u-items-center u-gap-1-5 u-fs-12 u-fw-600 u-text-primary">
 								<img v-if="pr.user?.avatar_url" :src="pr.user.avatar_url" class="pr-detail-avatar u-flex-shrink-0" alt="" />
 								<span class="u-min-w-0">{{ authorDisplayName }}</span>
 							</div>
 						</div>
 						<div class="pr-detail-stat pr-detail-stat-branch u-flex u-flex-col u-gap-0-5">
-							<span class="pr-detail-stat-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide">Branch</span>
+							<span class="pr-detail-stat-label u-fs-11 u-text-secondary u-uppercase u-tracking-wide">Branch</span>
 							<div
 								class="pr-detail-stat-value pr-detail-stat-branch-wrap u-flex u-flex-wrap u-items-center u-gap-1 u-fs-12 u-fw-600 u-font-mono u-leading-1-4"
 								:title="branchCompareTitle"
@@ -178,7 +178,7 @@
 							</div>
 						</div>
 						<div v-if="checkoutStatusText" class="pr-detail-stat pr-detail-stat-checkout u-flex u-flex-col u-gap-0-5">
-							<span class="pr-detail-stat-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide">Checkout</span>
+							<span class="pr-detail-stat-label u-fs-11 u-text-secondary u-uppercase u-tracking-wide">Checkout</span>
 							<div class="pr-detail-checkout-row u-flex u-items-center u-gap-1-5 u-min-w-0">
 								<span class="pr-detail-stat-value pr-detail-checkout-state u-fs-12 u-fw-600 u-font-mono u-leading-1-4 u-text-primary" :title="checkoutStatusTitle">{{ checkoutStatusText }}</span>
 								<a
@@ -192,7 +192,7 @@
 							</div>
 						</div>
 						<div class="pr-detail-stat pr-detail-stat-url u-flex u-flex-col u-gap-0-5">
-							<span class="pr-detail-stat-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide">GitHub PR URL</span>
+							<span class="pr-detail-stat-label u-fs-11 u-text-secondary u-uppercase u-tracking-wide">GitHub PR URL</span>
 							<div class="pr-detail-stat-url-row u-flex u-items-center u-gap-1-5 u-min-w-0">
 								<a
 									:href="prUrl"
@@ -215,7 +215,7 @@
 							</div>
 						</div>
 						<div v-if="asanaCardUrl" class="pr-detail-stat pr-detail-stat-asana u-flex u-flex-col u-gap-0-5">
-							<span class="pr-detail-stat-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide">Asana Card</span>
+							<span class="pr-detail-stat-label u-fs-11 u-text-secondary u-uppercase u-tracking-wide">Asana Card</span>
 							<div class="pr-detail-stat-asana-row u-flex u-items-center u-gap-1-5 u-min-w-0">
 								<a
 									:href="asanaCardUrl"
