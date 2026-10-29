@@ -206,25 +206,36 @@
 								<button
 									type="button"
 									class="pr-detail-stat-copy-btn u-inline-flex u-items-center u-justify-center u-flex-shrink-0 u-cursor-pointer"
-									:class="{ copied : prUrlCopyState === 'copied' }"
-									:title="prUrlCopyState === 'copied' ? 'Copied' : 'Copy URL'"
-									:aria-label="prUrlCopyState === 'copied' ? 'Copied PR URL' : 'Copy PR URL'"
-									@click="copyPrUrl"
-									v-html="prUrlCopyIcon"
+									:class="{ copied : copiedUrl === prUrl }"
+									:title="copiedUrl === prUrl ? 'Copied' : 'Copy URL'"
+									:aria-label="copiedUrl === prUrl ? 'Copied PR URL' : 'Copy PR URL'"
+									@click="copyUrl(prUrl, '.pr-detail-stat-url-link')"
+									v-html="copyIcon(prUrl)"
 								></button>
 							</div>
 						</div>
 						<div v-if="asanaCardUrl" class="pr-detail-stat pr-detail-stat-asana u-flex u-flex-col u-gap-0-5">
 							<span class="pr-detail-stat-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide">Asana Card</span>
-							<a
-								:href="asanaCardUrl"
-								target="_blank"
-								rel="noopener"
-								class="pr-detail-stat-asana-link u-min-w-0 u-fs-12 u-fw-600 u-font-mono"
-								:title="asanaCardUrl"
-							>
-								{{ asanaCardUrl }}
-							</a>
+							<div class="pr-detail-stat-asana-row u-flex u-items-center u-gap-1-5 u-min-w-0">
+								<a
+									:href="asanaCardUrl"
+									target="_blank"
+									rel="noopener"
+									class="pr-detail-stat-asana-link u-min-w-0 u-fs-12 u-fw-600 u-font-mono"
+									:title="asanaCardUrl"
+								>
+									{{ asanaCardUrl }}
+								</a>
+								<button
+									type="button"
+									class="pr-detail-stat-copy-btn u-inline-flex u-items-center u-justify-center u-flex-shrink-0 u-cursor-pointer"
+									:class="{ copied : copiedUrl === asanaCardUrl }"
+									:title="copiedUrl === asanaCardUrl ? 'Copied' : 'Copy URL'"
+									:aria-label="copiedUrl === asanaCardUrl ? 'Copied Asana card URL' : 'Copy Asana card URL'"
+									@click="copyUrl(asanaCardUrl, '.pr-detail-stat-asana-link')"
+									v-html="copyIcon(asanaCardUrl)"
+								></button>
+							</div>
 						</div>
 						<div class="pr-detail-stat u-flex u-flex-col u-gap-0-5">
 							<span class="pr-detail-stat-value u-fs-20 u-fw-600 u-text-primary">{{ pr.changed_files }}</span>
@@ -650,9 +661,9 @@ export default class PrOverviewTab extends Vue {
 	issueReplyDraftId: number | null        = null;
 	issueReplyBody                          = '';
 	issueReplySubmitting                    = false;
-	prUrlCopyState: 'idle' | 'copied'       = 'idle';
+	copiedUrl: string | null                = null;
 	selectedWorktreePath                    = '';
-	private prUrlCopyResetId: number | null = null;
+	private copiedUrlResetId: number | null = null;
 
 	approvingPr    = false;
 	approvePrError = '';
@@ -769,8 +780,8 @@ export default class PrOverviewTab extends Vue {
 		return null;
 	}
 
-	get prUrlCopyIcon(): string {
-		return iconSvg(this.prUrlCopyState === 'copied' ? 'checkmark' : 'copy', 14);
+	copyIcon(url: string): string {
+		return iconSvg(this.copiedUrl === url ? 'checkmark' : 'copy', 14);
 	}
 
 	get authorDisplayName(): string {
@@ -1111,20 +1122,21 @@ export default class PrOverviewTab extends Vue {
 		}
 	}
 
-	async copyPrUrl() {
+	/** Copies a URL and marks its button copied for 2s; when the clipboard is refused, selects the link's text instead. */
+	async copyUrl(url: string, linkSelector: string) {
 		try {
-			await navigator.clipboard.writeText(this.prUrl);
-			this.prUrlCopyState = 'copied';
-			if (this.prUrlCopyResetId != null) {
-				window.clearTimeout(this.prUrlCopyResetId);
+			await navigator.clipboard.writeText(url);
+			this.copiedUrl = url;
+			if (this.copiedUrlResetId != null) {
+				window.clearTimeout(this.copiedUrlResetId);
 			}
-			this.prUrlCopyResetId = window.setTimeout(() => {
-				this.prUrlCopyState   = 'idle';
-				this.prUrlCopyResetId = null;
+			this.copiedUrlResetId = window.setTimeout(() => {
+				this.copiedUrl        = null;
+				this.copiedUrlResetId = null;
 			}, 2000);
 		}
 		catch {
-			const link = this.$el?.querySelector?.('.pr-detail-stat-url-link') as HTMLElement | null;
+			const link = this.$el?.querySelector?.(linkSelector) as HTMLElement | null;
 			if (!link) {
 				return;
 			}
@@ -1393,8 +1405,8 @@ export default class PrOverviewTab extends Vue {
 		this.mergePollCancelled = true;
 		this.stopChecksPolling();
 		this.stopCheckDurationTimer();
-		if (this.prUrlCopyResetId != null) {
-			window.clearTimeout(this.prUrlCopyResetId);
+		if (this.copiedUrlResetId != null) {
+			window.clearTimeout(this.copiedUrlResetId);
 		}
 	}
 
@@ -2574,7 +2586,8 @@ html[data-color-scheme="light"] .pr-detail-overview .card > h2 {
 	}
 }
 
-.pr-detail-stat-url-row {
+.pr-detail-stat-url-row,
+.pr-detail-stat-asana-row {
 	max-width: 100%;
 }
 
