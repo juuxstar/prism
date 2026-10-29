@@ -4,6 +4,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { dirname, resolve }      from 'path';
 import { fileURLToPath }         from 'url';
 
+import { AgentApi }                        from './api/AgentApi.js';
 import { AuthApi }                         from './api/AuthApi.js';
 import { GitApi }                          from './api/GitApi.js';
 import { apiErrorHandler, wrapAsyncRoute } from './lib/httpErrors.js';
@@ -11,10 +12,15 @@ import { apiErrorHandler, wrapAsyncRoute } from './lib/httpErrors.js';
 const moduleDir              = dirname(fileURLToPath(import.meta.url));
 const CHECKOUT_WORKSPACE_DIR = process.env.PRISM_CHECKOUT_WORKSPACE_DIR || '/checkout-workspace';
 const CHECKOUT_HOST_DIR      = process.env.PRISM_CHECKOUT_HOST_DIR || undefined;
+const CLAUDE_PROJECTS_DIR    = process.env.PRISM_CLAUDE_PROJECTS_DIR || '/claude-projects';
 
 const app = express();
 app.use('/api/auth', new AuthApi().getRouter({ wrapHandler : wrapAsyncRoute }));
 app.use('/api/git', new GitApi(CHECKOUT_WORKSPACE_DIR, CHECKOUT_HOST_DIR).getRouter({ wrapHandler : wrapAsyncRoute }));
+app.use(
+	'/api/agent',
+	new AgentApi(CLAUDE_PROJECTS_DIR, CHECKOUT_WORKSPACE_DIR, CHECKOUT_HOST_DIR).getRouter({ wrapHandler : wrapAsyncRoute })
+);
 app.use(
 	'/api/github',
 	express.json(),

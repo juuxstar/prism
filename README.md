@@ -16,6 +16,7 @@ kanban-style board, and reviews them in a side-by-side diff viewer backed by an 
 - **Checks Polling** — automatically monitors pending CI checks and moves PRs to "Ready to Merge" when they pass
 - **Pinned PRs** — keep the ones you are shepherding in the header, with their check state, from any screen
 - **Worktree Overview** — local checkouts with their branch, divergence from the remote, and staged/unstaged counts
+- **Agent Mirror** — a worktree's Agent tab follows the Claude Code sessions run in it, live and read-only
 
 ### Pull Request Detail
 
@@ -106,6 +107,8 @@ npm stop
 ```
 
 Git checkout actions run inside the PRism server process. The Docker Compose files mount the host checkout workspace at `/checkout-workspace` by default, and PRism detects whether that mounted directory is a Git checkout itself or a parent containing worktree subdirectories. Override `PRISM_CHECKOUT_HOST_DIR` for the host path, or `PRISM_CHECKOUT_WORKSPACE_DIR` if the in-container mount point needs to change.
+
+The worktree view's Agent tab reads the transcripts Claude Code keeps in `~/.claude/projects`, which both Compose files mount read-only at `/claude-projects`. Claude Code names each project folder after the session's working directory, so a worktree's sessions are found from its host path. Override `PRISM_CLAUDE_PROJECTS_HOST_DIR` if Claude Code keeps its config elsewhere (`CLAUDE_CONFIG_DIR`).
 
 `npm install` on the host is still needed for the editor and for `npm start lint` and `npm start typecheck`, which read the source rather than run it.
 
@@ -222,8 +225,10 @@ PRism/
       api/
         AuthApi.ts              Device-flow endpoints under /api/auth
         GitApi.ts               Local checkout endpoints under /api/git
+        AgentApi.ts             Claude Code session list and live stream under /api/agent
       lib/
         GitService.ts           Runs git against the mounted checkout workspace
+        AgentSessionService.ts  Reads a worktree's Claude Code transcripts from the read-only mount
     client/
       index.html                Vite SPA entry point
       env.d.ts                  TypeScript shims
@@ -240,6 +245,7 @@ PRism/
         api/
           githubClient.ts       GitHub REST + GraphQL client, caches
           gitCheckoutClient.ts  Client for the /api/git endpoints
+          agentClient.ts        Client for the /api/agent endpoints
           auth.ts               Device flow auth via /api/auth/*
         diff/
           diffLineBuilder.ts    Builds split diff lines from a patch or from whole files
