@@ -214,6 +214,18 @@
 								></button>
 							</div>
 						</div>
+						<div v-if="asanaCardUrl" class="pr-detail-stat pr-detail-stat-asana u-flex u-flex-col u-gap-0-5">
+							<span class="pr-detail-stat-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide">Asana Card</span>
+							<a
+								:href="asanaCardUrl"
+								target="_blank"
+								rel="noopener"
+								class="pr-detail-stat-asana-link u-min-w-0 u-fs-12 u-fw-600 u-font-mono"
+								:title="asanaCardUrl"
+							>
+								{{ asanaCardUrl }}
+							</a>
+						</div>
 						<div class="pr-detail-stat u-flex u-flex-col u-gap-0-5">
 							<span class="pr-detail-stat-value u-fs-20 u-fw-600 u-text-primary">{{ pr.changed_files }}</span>
 							<span class="pr-detail-stat-label u-fs-11 u-text-tertiary u-uppercase u-tracking-wide">Files</span>
@@ -570,6 +582,9 @@ const TEAM_REQUESTED_LABEL = /^\s*[\u03b1\u03b2\u03b3]\s*:\s*(?:review|changes)[
 /** Label the Approve action adds once the requested-review labels are gone. */
 const READY_TO_MERGE_LABEL = 'ready to merge';
 
+/** An Asana link in Markdown, stopping before the brackets, quotes or angle brackets that may wrap it. */
+const ASANA_URL = /https:\/\/app\.asana\.com\/[^\s)\]>"'<]+/;
+
 interface OverviewThread {
 	id: number;
 	path: string;
@@ -740,6 +755,18 @@ export default class PrOverviewTab extends Vue {
 
 	get prUrl(): string {
 		return String(this.pr?.html_url || `https://github.com/${this.owner}/${this.repo}/pull/${this.prNumber}`);
+	}
+
+	/** The first Asana task linked from the description, else from the issue comments, oldest first. */
+	get asanaCardUrl(): string | null {
+		const comments = [ ...this.issueComments ].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+		for (const text of [ this.pr?.body, ...comments.map(c => c.body) ]) {
+			const url = text?.match(ASANA_URL)?.[0];
+			if (url) {
+				return url;
+			}
+		}
+		return null;
 	}
 
 	get prUrlCopyIcon(): string {
@@ -2155,6 +2182,7 @@ function delay(ms: number): Promise<void> {
 }
 
 .pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-url,
+.pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-asana,
 .pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-branch,
 .pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-checkout,
 .pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-author {
@@ -2167,13 +2195,16 @@ function delay(ms: number): Promise<void> {
 }
 
 .pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-url > .pr-detail-stat-label,
+.pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-asana > .pr-detail-stat-label,
 .pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-branch > .pr-detail-stat-label,
 .pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-checkout > .pr-detail-stat-label,
 .pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat-author > .pr-detail-stat-label {
 	white-space: nowrap;
 }
 
-.pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat:not(.pr-detail-stat-url):not(.pr-detail-stat-branch):not(.pr-detail-stat-checkout):not(.pr-detail-stat-author) {
+.pr-detail-overview .pr-detail-actions-stats .pr-detail-stat-grid > .pr-detail-stat:not(
+	.pr-detail-stat-url, .pr-detail-stat-asana, .pr-detail-stat-branch, .pr-detail-stat-checkout, .pr-detail-stat-author
+) {
 	flex: 1 1 0;
 	min-width: 0;
 	text-align: center;
@@ -2547,7 +2578,8 @@ html[data-color-scheme="light"] .pr-detail-overview .card > h2 {
 	max-width: 100%;
 }
 
-.pr-detail-stat-url-link {
+.pr-detail-stat-url-link,
+.pr-detail-stat-asana-link {
 	color: var(--accent-blue);
 	text-decoration: none;
 	overflow: hidden;
