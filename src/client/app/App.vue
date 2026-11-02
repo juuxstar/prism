@@ -629,6 +629,11 @@ export default class App extends Vue {
 
 	closePrOverlay() {
 		this.selectedOverlayPr = null;
+		// The PR may have been merged, relabelled or retitled in the slide-over, and the board behind it never
+		// looked away; revalidate in place so its cards catch up without blanking.
+		if (!this.refreshing) {
+			void this.handleRefresh();
+		}
 	}
 
 	// ── Retry ──────────────────────────────────────────────
